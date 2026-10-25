@@ -29,7 +29,16 @@ CREATE TABLE IF NOT EXISTS users (
   credentials TEXT DEFAULT '',
   consent_at REAL,                     -- enterprise employees must opt in before capture
   capture_token TEXT UNIQUE,           -- used by the browser recorder
+  password_hash TEXT,                  -- pbkdf2; NULL = cannot sign in with a password
+  tier TEXT NOT NULL DEFAULT 'applicant',  -- experts: applicant | qualified | senior
   created_at REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS auth_sessions (
+  token_hash TEXT PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  created_at REAL NOT NULL,
+  expires_at REAL NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS tasks (
@@ -44,8 +53,33 @@ CREATE TABLE IF NOT EXISTS tasks (
   answer_key TEXT NOT NULL,      -- JSON, never sent to the client
   reward_cents INTEGER NOT NULL,
   active INTEGER NOT NULL DEFAULT 1,
+  purpose TEXT NOT NULL DEFAULT 'work' CHECK (purpose IN ('work','qualification')),
+  request_id INTEGER,            -- set when the task was made for a buyer's data request
   created_at REAL NOT NULL,
   UNIQUE (template, seed)
+);
+
+-- Experts pass a graded qualification task per template before paid work.
+CREATE TABLE IF NOT EXISTS qualifications (
+  id INTEGER PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  template TEXT NOT NULL,
+  session_id INTEGER NOT NULL REFERENCES sessions(id),
+  score REAL NOT NULL,
+  passed INTEGER NOT NULL,
+  created_at REAL NOT NULL
+);
+
+-- Frontier-model baseline runs on sandbox tasks: which tasks today's models fail.
+CREATE TABLE IF NOT EXISTS baselines (
+  id INTEGER PRIMARY KEY,
+  task_id INTEGER NOT NULL REFERENCES tasks(id),
+  model TEXT NOT NULL,
+  score REAL NOT NULL,
+  passed INTEGER NOT NULL,
+  steps INTEGER NOT NULL,
+  transcript TEXT NOT NULL,
+  created_at REAL NOT NULL
 );
 
 -- A session is one episode of work. source='sandbox' (marketplace task) or 'capture' (real work).
@@ -95,6 +129,31 @@ CREATE TABLE IF NOT EXISTS records (
   review_notes TEXT DEFAULT '',
   created_at REAL NOT NULL,
   reviewed_at REAL
+);
+
+-- Each reviewer's verdict. A record is decided once enough reviewers agree.
+CREATE TABLE IF NOT EXISTS record_reviews (
+  id INTEGER PRIMARY KEY,
+  record_id INTEGER NOT NULL REFERENCES records(id),
+  reviewer_id INTEGER NOT NULL REFERENCES users(id),
+  approve INTEGER NOT NULL,
+  scores TEXT NOT NULL DEFAULT '{}',
+  notes TEXT NOT NULL DEFAULT '',
+  created_at REAL NOT NULL,
+  UNIQUE (record_id, reviewer_id)
+);
+
+-- Reviewer fixes to individual steps. Each one becomes a preference pair (original vs corrected).
+CREATE TABLE IF NOT EXISTS step_corrections (
+  id INTEGER PRIMARY KEY,
+  record_id INTEGER NOT NULL REFERENCES records(id),
+  step_i INTEGER NOT NULL,
+  reviewer_id INTEGER NOT NULL REFERENCES users(id),
+  issue TEXT NOT NULL CHECK (issue IN ('wrong_action','weak_reasoning','both')),
+  corrected_thought TEXT NOT NULL DEFAULT '',
+  corrected_action TEXT,         -- JSON {tool, args} or NULL to keep the action
+  note TEXT NOT NULL DEFAULT '',
+  created_at REAL NOT NULL
 );
 
 -- Enterprise: export jobs that turn approved records into post-training files.
@@ -153,6 +212,31 @@ CREATE TABLE IF NOT EXISTS orders (
   payment_ref TEXT NOT NULL,
   created_at REAL NOT NULL,
   UNIQUE (dataset_id, buyer_id)
+);
+
+-- Buyers ask for custom data; the platform turns a request into a batch of tasks.
+CREATE TABLE IF NOT EXISTS data_requests (
+  id INTEGER PRIMARY KEY,
+  buyer_id INTEGER NOT NULL REFERENCES users(id),
+  template TEXT NOT NULL,
+  quantity INTEGER NOT NULL,
+  min_quality REAL NOT NULL,
+  budget_cents INTEGER NOT NULL,
+  notes TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL CHECK (status IN ('open','in_production','delivered','declined')),
+  dataset_id INTEGER REFERENCES datasets(id),
+  created_at REAL NOT NULL
+);
+
+-- Waitlist / demo requests from the public site.
+CREATE TABLE IF NOT EXISTS leads (
+  id INTEGER PRIMARY KEY,
+  kind TEXT NOT NULL CHECK (kind IN ('enterprise','expert','buyer')),
+  name TEXT NOT NULL,
+  email TEXT NOT NULL,
+  company TEXT NOT NULL DEFAULT '',
+  message TEXT NOT NULL DEFAULT '',
+  created_at REAL NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS payouts (

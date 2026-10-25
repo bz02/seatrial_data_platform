@@ -11,7 +11,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from . import config, db
-from .pipeline import convert
+from .pipeline import convert, preferences
 
 DEFAULT_POLICY = {
     "domain": "accounting",
@@ -200,25 +200,47 @@ def create_export(org_id: int, user_id: int, fmt: str = "both", workflow: str | 
                db.dumps([r["id"] for r in rows]), "", db.now())
     out = config.DATA_DIR / "exports" / f"org_{org_id}" / f"export_{eid}"
     out.mkdir(parents=True, exist_ok=True)
-    records = [db.loads(r["record"]) for r in rows]
+    records = [with_corrections(r["id"], db.loads(r["record"])) for r in rows]
     files = write_files(out, records, fmt, title=f"Export {eid}")
     db.x("UPDATE exports SET path=? WHERE id=?", str(out), eid)
     db.audit(org_id, user_id, "export.create", f"export:{eid}", records=len(rows), format=fmt)
     return {"id": eid, "records": len(rows), "files": files, "path": str(out)}
 
 
+def with_corrections(record_id: int, record: dict) -> dict:
+    record["_corrections"] = preferences.load_corrections(record_id)
+    return record
+
+
+def _jsonl(path: Path, rows) -> int:
+    n = 0
+    with open(path, "w") as f:
+        for r in rows:
+            f.write(json.dumps(r, ensure_ascii=False) + "\n")
+            n += 1
+    return n
+
+
 def write_files(out: Path, records: list[dict], fmt: str, title: str) -> list[str]:
+    """Write every export format. Reviewer corrections are applied to SFT data and also emitted as
+    preference pairs; the untouched originals stay in trajectories.jsonl for audit."""
     files = []
+    corr = {r["id"]: r.pop("_corrections", []) for r in records}
+    corrected = [preferences.apply_corrections(r, corr[r["id"]]) for r in records]
     if fmt in ("chat", "both"):
-        with open(out / "sft_chat.jsonl", "w") as f:
-            for r in records:
-                f.write(json.dumps(convert.to_chat(r), ensure_ascii=False) + "\n")
+        _jsonl(out / "sft_chat.jsonl", (convert.to_chat(r) for r in corrected))
         files.append("sft_chat.jsonl")
     if fmt in ("trajectory", "both"):
-        with open(out / "trajectories.jsonl", "w") as f:
-            for r in records:
-                f.write(json.dumps(r, ensure_ascii=False) + "\n")
+        _jsonl(out / "trajectories.jsonl", (dict(r, reviewer_corrections=corr[r["id"]]) for r in records))
         files.append("trajectories.jsonl")
+    pairs = [p for r in records for p in preferences.preference_pairs(r, corr[r["id"]])]
+    if pairs:
+        _jsonl(out / "preferences.jsonl", pairs)
+        files.append("preferences.jsonl")
+    evals = [e for e in (preferences.eval_item(r) for r in corrected) if e]
+    if evals:
+        _jsonl(out / "evals.jsonl", evals)
+        files.append("evals.jsonl")
     envs = [e for e in (convert.to_rl_env(r) for r in records) if e]
     if envs:
         with open(out / "rl_environments.jsonl", "w") as f:
@@ -255,5 +277,7 @@ def datacard(records: list[dict], title: str) -> str:
               "", "## Files", "",
               "- `sft_chat.jsonl`: agent SFT examples (system, user task, assistant reasoning + tool calls, tool results).",
               "- `trajectories.jsonl`: full step-level records with observations, outcome and quality scores.",
-              "- `rl_environments.jsonl`: sandbox tasks only; initial state, tools and verifier reference."]
+              "- `rl_environments.jsonl`: sandbox tasks only; initial state, tools and verifier reference.",
+              "- `preferences.jsonl`: one chosen/rejected pair per step a reviewer corrected (DPO-ready).",
+              "- `evals.jsonl`: captured episodes as evaluation tasks with final-state checkpoints."]
     return "\n".join(lines) + "\n"

@@ -1,21 +1,22 @@
 // Shared helpers for every SeaTrail page.
 const ST = {
-  userId() { try { return localStorage.getItem("st_user"); } catch (e) { return null; } },
-  setUser(id) { try { localStorage.setItem("st_user", id); } catch (e) {} },
+  me: null,
 
   async api(path, opts = {}) {
-    const headers = Object.assign({ "Content-Type": "application/json" }, opts.headers || {});
-    const uid = ST.userId();
-    if (uid) headers["X-User-Id"] = uid;
-    const res = await fetch(path, { method: opts.method || "GET", headers,
+    const headers = Object.assign({ "Content-Type": "application/json", "X-Requested-With": "seatrail" }, opts.headers || {});
+    const res = await fetch(path, { method: opts.method || "GET", headers, credentials: "same-origin",
       body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined });
     const data = await res.json().catch(() => ({}));
+    if (res.status === 401 && !opts.noRedirect) {
+      location.href = "/login?next=" + encodeURIComponent(location.pathname + location.hash);
+      throw new Error("sign in required");
+    }
     if (!res.ok) throw new Error(data.detail || res.statusText);
     return data;
   },
 
   esc(s) { return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); },
-  money(c) { return "$" + (c / 100).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 }); },
+  money(c) { const f = c % 100 ? 2 : 0; return "$" + (c / 100).toLocaleString(undefined, { minimumFractionDigits: f, maximumFractionDigits: f }); },
   num(v) { return typeof v === "number" ? v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : (v ?? ""); },
   pct(v) { return Math.round((v || 0) * 100) + "%"; },
   date(ts) { return ts ? new Date(ts * 1000).toLocaleString() : ""; },
@@ -32,23 +33,47 @@ const ST = {
     return `<span class="tag ${cls}">${ST.label(s)}</span>`;
   },
 
-  // Top navigation with a demo user switcher. `roles` limits the switcher to people who can use this page.
+  // Top navigation. `roles` lists who can use this page. In demo mode the bar also has an account
+  // switcher, and opening a page as the wrong role signs in as the first demo user who fits.
   async topbar(active, roles) {
-    const users = await ST.api("/api/demo/users");
-    const allowed = users.filter((u) => !roles || roles.includes(u.role));
-    let me = allowed.find((u) => String(u.id) === ST.userId());
-    if (!me && allowed.length) { me = allowed[0]; ST.setUser(me.id); }
-    const links = [["/", "Home"], ["/expert", "Expert"], ["/market", "Marketplace"], ["/enterprise", "Enterprise"], ["/review", "Review"]];
+    const cfg = await ST.api("/api/auth/config");
+    let me = await ST.api("/api/me", { noRedirect: true }).catch(() => null);
+    let demoUsers = [];
+    if (cfg.demo_mode) {
+      demoUsers = await ST.api("/api/demo/users");
+      const fits = (u) => !roles || roles.includes(u.role);
+      if (!me || !fits(me)) {
+        const pick = demoUsers.find(fits);
+        if (pick) me = await ST.api("/api/auth/demo-login", { method: "POST", body: { user_id: pick.id } });
+      }
+    }
+    if (!me) { location.href = "/login?next=" + encodeURIComponent(location.pathname + location.hash); return new Promise(() => {}); }
+    ST.me = me;
+    const links = [["/app", "Home"], ["/expert", "Expert"], ["/market", "Marketplace"], ["/enterprise", "Enterprise"], ["/review", "Review"]];
     const bar = document.createElement("header");
     bar.className = "topbar";
+    const allowed = demoUsers.filter((u) => !roles || roles.includes(u.role));
     bar.innerHTML = `
       <a class="logo" href="/">SeaTrail</a>
       <nav>${links.map(([h, t]) => `<a href="${h}" class="${h === active ? "on" : ""}">${t}</a>`).join("")}</nav>
-      <div class="user"><span class="small">Demo user</span>
-        <select id="st-user">${allowed.map((u) => `<option value="${u.id}" ${me && u.id === me.id ? "selected" : ""}>${ST.esc(u.name)} · ${ST.label(u.role)}</option>`).join("")}</select>
+      <div class="user">
+        ${cfg.demo_mode && allowed.length ? `<span class="small">Demo</span>
+          <select id="st-user" aria-label="Switch demo account">${allowed.map((u) => `<option value="${u.id}" ${u.id === me.id ? "selected" : ""}>${ST.esc(u.name)} · ${ST.label(u.role)}</option>`).join("")}</select>`
+          : `<span class="small">${ST.esc(me.name)} · ${ST.label(me.role)}</span>`}
+        <button id="st-logout" class="ghost">Sign out</button>
       </div>`;
     document.body.prepend(bar);
-    bar.querySelector("#st-user").onchange = (e) => { ST.setUser(e.target.value); location.reload(); };
+    const sel = bar.querySelector("#st-user");
+    if (sel) sel.onchange = async (e) => {
+      await ST.api("/api/auth/demo-login", { method: "POST", body: { user_id: Number(e.target.value) } });
+      location.reload();
+    };
+    bar.querySelector("#st-logout").onclick = async () => { await ST.api("/api/auth/logout", { method: "POST" }); location.href = "/login"; };
+    if (roles && !roles.includes(me.role)) {
+      const main = document.querySelector("main");
+      main.innerHTML = `<div class="notice warn">This page is for ${roles.map(ST.label).join(", ")} accounts. You are signed in as ${ST.esc(me.name)} (${ST.label(me.role)}).</div>`;
+      return new Promise(() => {});
+    }
     return me;
   },
 

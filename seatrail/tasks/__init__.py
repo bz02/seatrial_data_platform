@@ -25,4 +25,6 @@ def create_task(template: str, seed: int) -> int:
 
 def public_task(row: dict) -> dict:
     """Task as the expert sees it. Never includes the answer key."""
-    return {k: row[k] for k in ("id", "template", "domain", "difficulty", "title", "brief", "reward_cents")}
+    out = {k: row[k] for k in ("id", "template", "domain", "difficulty", "title", "brief", "reward_cents")}
+    out["purpose"] = row.get("purpose") or "work"
+    return out

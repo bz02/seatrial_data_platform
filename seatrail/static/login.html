@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign in · SeaTrail</title>
+<link rel="stylesheet" href="/static/app.css">
+</head><body>
+<main class="auth">
+  <p><a href="/" class="logo" style="font-weight:700;text-decoration:none">← SeaTrail</a></p>
+  <section class="panel">
+    <div class="tabs" id="tabs">
+      <button data-tab="login" class="on">Sign in</button>
+      <button data-tab="signup">Create account</button>
+    </div>
+    <form id="login">
+      <label class="f">Email<input name="email" type="email" autocomplete="email" required></label>
+      <label class="f">Password<input name="password" type="password" autocomplete="current-password" required></label>
+      <button class="primary" type="submit">Sign in</button>
+      <p class="small muted">Company accounts are created by your administrator. Ask them for an invite.</p>
+    </form>
+    <form id="signup" class="hidden">
+      <label class="f">I am
+        <select name="role">
+          <option value="expert">A professional who wants paid expert tasks</option>
+          <option value="buyer">A model builder who buys training data</option>
+        </select></label>
+      <label class="f">Full name<input name="name" autocomplete="name" required></label>
+      <label class="f">Email<input name="email" type="email" autocomplete="email" required></label>
+      <label class="f" id="cred-f">Credentials (license, years, specialty)<input name="credentials" placeholder="CPA, 8 years, AP and close"></label>
+      <label class="f">Password (10+ characters)<input name="password" type="password" minlength="10" autocomplete="new-password" required></label>
+      <button class="primary" type="submit">Create account</button>
+      <p class="small muted">Experts start by passing a short graded task in each specialty before paid work unlocks.</p>
+    </form>
+    <div id="err" class="notice bad hidden" style="margin-top:12px"></div>
+  </section>
+  <section class="panel hidden" id="demo" style="margin-top:16px">
+    <h2>Try a demo account</h2>
+    <p class="small muted">This server runs in demo mode with sample data. Pick anyone to look around.</p>
+    <div class="demo-list" id="demo-list"></div>
+  </section>
+</main>
+<script src="/static/common.js"></script>
+<script>
+const next = new URLSearchParams(location.search).get("next");
+const home = { expert: "/expert", buyer: "/market", admin: "/review", seller: "/market", employee: "/enterprise",
+  steward: "/enterprise", ml_engineer: "/enterprise", org_admin: "/enterprise" };
+const go = (u) => { location.href = next && next.startsWith("/") && !next.startsWith("//") ? next : (home[u.role] || "/app"); };
+const err = (m) => { const e = document.getElementById("err"); e.textContent = m; e.classList.toggle("hidden", !m); };
+document.querySelectorAll("#tabs button").forEach((b) => b.onclick = () => {
+  document.querySelectorAll("#tabs button").forEach((x) => x.classList.toggle("on", x === b));
+  document.getElementById("login").classList.toggle("hidden", b.dataset.tab !== "login");
+  document.getElementById("signup").classList.toggle("hidden", b.dataset.tab !== "signup");
+  err("");
+});
+if (location.hash === "#signup" || new URLSearchParams(location.search).get("signup")) document.querySelector('[data-tab="signup"]').click();
+const role = new URLSearchParams(location.search).get("role");
+if (role) document.querySelector('#signup [name=role]').value = role;
+const credF = () => document.getElementById("cred-f").classList.toggle("hidden", document.querySelector('#signup [name=role]').value !== "expert");
+document.querySelector('#signup [name=role]').onchange = credF; credF();
+const formJSON = (f) => Object.fromEntries(new FormData(f).entries());
+document.getElementById("login").onsubmit = async (e) => {
+  e.preventDefault(); err("");
+  try { go(await ST.api("/api/auth/login", { method: "POST", body: formJSON(e.target), noRedirect: true })); }
+  catch (x) { err(x.message); }
+};
+document.getElementById("signup").onsubmit = async (e) => {
+  e.preventDefault(); err("");
+  try { go(await ST.api("/api/auth/signup", { method: "POST", body: formJSON(e.target), noRedirect: true })); }
+  catch (x) { err(x.message); }
+};
+(async () => {
+  const cfg = await ST.api("/api/auth/config");
+  if (!cfg.demo_mode) return;
+  const users = await ST.api("/api/demo/users");
+  document.getElementById("demo").classList.remove("hidden");
+  document.getElementById("demo-list").innerHTML = users.map((u) => `<button data-id="${u.id}"><span>${ST.esc(u.name)}</span><span class="small muted">${ST.label(u.role)} · ${ST.esc(u.org)}</span></button>`).join("");
+  document.querySelectorAll("#demo-list button").forEach((b) => b.onclick = async () =>
+    go(await ST.api("/api/auth/demo-login", { method: "POST", body: { user_id: Number(b.dataset.id) } })));
+})();
+</script>
+</body></html>

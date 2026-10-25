@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import random
 
-from . import db, enterprise, market, tasks
+from . import db, enterprise, experts, market, tasks
 from .pipeline import quality
 
 USERS = [
@@ -40,6 +40,15 @@ def seed_base() -> dict:
     for template in tasks.TEMPLATES:
         for seed in range(1, 5):
             tasks.create_task(template, seed)
+    experts.ensure_qualification_tasks(tasks.TEMPLATES)
+    users = {u["email"]: u for u in db.q("SELECT * FROM users")}
+    # The two demo experts have already passed every qualification, the same way a real expert would.
+    for email in ("dana@experts.example", "luis@experts.example"):
+        uid = users[email]["id"]
+        done = experts.qualified_templates(uid)
+        for t in db.q("SELECT * FROM tasks WHERE purpose='qualification'"):
+            if t["template"] not in done:
+                experts.grade_qualification(run_sandbox_episode(uid, t["id"], seed=uid))
     return {u["email"]: u for u in db.q("SELECT * FROM users")}
 
 
@@ -207,7 +216,7 @@ def seed_full(base_url: str = "http://localhost:8000") -> dict:
     dana, luis = users["dana@experts.example"], users["luis@experts.example"]
     admin = users["admin@seatrail.example"]
     out = {"sandbox_records": [], "capture_records": []}
-    task_rows = db.q("SELECT * FROM tasks ORDER BY id")
+    task_rows = db.q("SELECT * FROM tasks WHERE purpose='work' ORDER BY id")
     for i, t in enumerate(task_rows[:9]):
         expert = dana if i % 2 == 0 else luis
         if db.q1("SELECT id FROM sessions WHERE task_id=? AND user_id=?", t["id"], expert["id"]):
@@ -234,4 +243,42 @@ def seed_full(base_url: str = "http://localhost:8000") -> dict:
             quality.review(rid, steward["id"], True, "Approved for training.")
     # One unsubmitted capture so the employee review screen has something to show.
     run_capture_episode(sarah, base_url, 7, "", workflow="", outcome="")
+    # Demo-only baseline runs from a scripted agent (clearly labeled), so the gap screens have content.
+    if not db.q1("SELECT id FROM baselines"):
+        for i, t in enumerate(task_rows[:6]):
+            seed_demo_baseline(t, accuracy=1.0 if i % 3 == 0 else 0.55, seed=i)
+    # A reviewer fix on one approved record, so preference export has an example.
+    rec = db.q1("SELECT id, record FROM records WHERE source='sandbox' AND status='approved' ORDER BY id")
+    if rec and not db.q1("SELECT id FROM step_corrections"):
+        step = next((s for s in db.loads(rec["record"])["steps"] if s["action"] and s["action"]["tool"] == "edit_cell"), None)
+        if step:
+            quality.add_correction(rec["id"], admin, step["i"], "weak_reasoning",
+                                   "Cite the evidence: amounts agree to the cent and dates are within the clearing "
+                                   "window, so this item is cleared.", note="demo correction")
+    buyer = users["data@frontier-lab.example"]
+    if not db.q1("SELECT id FROM data_requests"):
+        market.create_request(buyer, "bank_reconciliation", 40, 0.85, 1200000,
+                              "More NSF returns and bank-fee edge cases, US GAAP.")
     return out
+
+
+DEMO_BASELINE_MODEL = "demo-scripted-baseline"
+
+
+def seed_demo_baseline(task_row: dict, accuracy: float, seed: int) -> None:
+    """Fill the baselines table with a scripted run. Not a real model; labeled as such."""
+    from . import config, sandbox
+    from .verifier import verify
+    state = db.loads(task_row["initial_state"])
+    events = [e for e in scripted_sandbox_events(task_row, accuracy=accuracy, seed=seed) if e["type"] != "think"]
+    kept = []
+    for e in events:
+        try:
+            state = sandbox.apply(state, e["type"], e["payload"])
+            kept.append(e)
+        except sandbox.ActionError:
+            pass
+    v = verify(state, db.loads(task_row["answer_key"]), config.VERIFY_PASS_SCORE)
+    db.x("INSERT INTO baselines (task_id, model, score, passed, steps, transcript, created_at) VALUES (?,?,?,?,?,?,?)",
+         task_row["id"], DEMO_BASELINE_MODEL, v["score"], int(v["passed"]), len(kept),
+         db.dumps({"stop": "submitted", "events": kept, "checks": v["checks"], "demo": True}), db.now())

@@ -27,3 +27,16 @@ OPEN_MARKETPLACE = _env("SEATRAIL_OPEN_MARKETPLACE", "false").lower() == "true"
 TAKE_RATE = float(_env("SEATRAIL_TAKE_RATE", "0.15"))
 EXPERT_REVENUE_SHARE = float(_env("SEATRAIL_EXPERT_REVENUE_SHARE", "0.20"))
 PLATFORM_SELLER_ID = 0
+
+# Security
+SECRET_KEY = _env("SEATRAIL_SECRET_KEY", "dev-only-change-me")
+# Demo mode: one-click demo accounts and the X-User-Id header. Never enable with real customer data.
+DEMO_MODE = _env("SEATRAIL_DEMO_MODE", "true").lower() == "true"
+SESSION_DAYS = int(_env("SEATRAIL_SESSION_DAYS", "14"))
+COOKIE_SECURE = _env("SEATRAIL_COOKIE_SECURE", "false").lower() == "true"
+
+# Review: records below this quality need two independent approvals.
+DOUBLE_REVIEW_BELOW = float(_env("SEATRAIL_DOUBLE_REVIEW_BELOW", "0.8"))
+# Experts earn this multiple of the reward on tasks the frontier-model baseline failed.
+HARD_TASK_BONUS = float(_env("SEATRAIL_HARD_TASK_BONUS", "1.5"))
+BASELINE_MODEL = _env("SEATRAIL_BASELINE_MODEL", "claude-opus-5-5")

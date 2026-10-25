@@ -17,8 +17,8 @@ const $ = (id) => document.getElementById(id);
 
 function tabs() {
   const t = [["catalog", "Catalog"]];
-  if (me.role === "buyer") t.push(["purchases", "My purchases"]);
-  if (me.role === "admin") t.push(["admin", "Manage datasets"], ["ledger", "Revenue & fees"]);
+  if (me.role === "buyer") t.push(["purchases", "My purchases"], ["requests", "Custom data"]);
+  if (me.role === "admin") t.push(["admin", "Manage datasets"], ["requests", "Custom requests"], ["baseline", "Model baseline"], ["leads", "Leads"], ["ledger", "Revenue & fees"]);
   if (me.role === "seller") t.push(["sell", "Sell a dataset"]);
   $("tabs").innerHTML = t.map(([k, l]) => `<button class="${k === tab ? "on" : ""}" data-t="${k}">${l}</button>`).join("");
   $("tabs").querySelectorAll("button").forEach((b) => b.onclick = () => { tab = b.dataset.t; render(); });
@@ -63,6 +63,47 @@ async function render() {
         ST.toast("Dataset listed"); render();
       } catch (e) { ST.toast(e.message); }
     };
+  } else if (tab === "requests") {
+    const rs = await ST.api("/api/market/requests");
+    const tbl = `<div class="panel tight"><div class="table-wrap"><table><tr><th>#</th><th>Task family</th><th>Qty</th><th>Min quality</th><th>Budget</th><th>Progress</th><th>Status</th><th></th></tr>
+      ${rs.map((r) => `<tr><td>${r.id}</td><td>${ST.label(r.template)}<div class="small muted">${ST.esc(r.notes)}</div></td><td class="num">${r.quantity}</td><td class="num">${ST.pct(r.min_quality)}</td>
+        <td class="num">${ST.money(r.budget_cents)}</td><td class="small">${r.progress.approved_records}/${r.quantity} approved · ${r.progress.tasks} tasks</td><td>${ST.statusTag(r.status)}</td>
+        <td>${me.role === "admin" ? (r.status === "open" ? `<button class="primary" data-ra="${r.id}/produce">Create tasks</button> <button data-ra="${r.id}/decline">Decline</button>`
+          : r.status === "in_production" ? `<button class="primary" data-ra="${r.id}/deliver">Deliver</button>` : "")
+          : r.dataset_id ? files(r.dataset_id) : ""}</td></tr>`).join("") || '<tr><td colspan="8" class="muted">No requests yet.</td></tr>'}</table></div></div>`;
+    v.innerHTML = me.role === "buyer" ? `<div class="grid cols-2"><div class="panel"><h2>Order custom data</h2>
+      <p class="small muted">We write fresh tasks for your order that no one else gets, qualified experts complete them, and only records that pass verification and review are delivered. Exclusive license.</p>
+      <div class="grid"><label class="f">Task family<select id="rt"><option>bank_reconciliation</option><option>ap_three_way_match</option><option>expense_audit</option></select></label>
+      <div class="row"><label class="f">Records<input id="rq" type="number" value="50" min="1" max="1000" style="width:100px"></label>
+      <label class="f">Min quality<input id="rmq" type="number" step="0.05" value="0.8" style="width:90px"></label>
+      <label class="f">Budget (USD)<input id="rb" type="number" value="10000" style="width:120px"></label></div>
+      <label class="f">What you need<textarea id="rn" rows="3" placeholder="e.g. more NSF returns and foreign-currency items; US GAAP"></textarea></label>
+      <div><button class="primary" id="rgo">Send request</button></div></div></div>${tbl}</div>` : tbl;
+    if ($("rgo")) $("rgo").onclick = async () => {
+      try { await ST.api("/api/market/requests", { method: "POST", body: { template: $("rt").value, quantity: +$("rq").value,
+        min_quality: +$("rmq").value, budget_cents: Math.round(+$("rb").value * 100), notes: $("rn").value } }); ST.toast("Request sent"); render(); }
+      catch (e) { ST.toast(e.message); }
+    };
+    v.querySelectorAll("[data-ra]").forEach((b) => b.onclick = async () => {
+      try { await ST.api(`/api/admin/requests/${b.dataset.ra}`, { method: "POST" }); ST.toast("Done"); render(); } catch (e) { ST.toast(e.message); }
+    });
+  } else if (tab === "baseline") {
+    const b = await ST.api("/api/admin/baselines");
+    v.innerHTML = `<div class="notice small" style="margin-bottom:12px">The baseline runs ${ST.esc("a frontier model")} on a task with the same tools and the same hidden answer key experts face. Tasks the model fails pay experts a bonus and are what buyers want most. Needs an Anthropic API key on the server.</div>
+      <div class="grid cols-2"><div class="panel"><h2>Model vs expert by task family</h2><table><tr><th>Family</th><th>Tasks run</th><th>Model pass rate</th><th>Model score</th><th>Expert score</th></tr>
+      ${b.gap.map((g) => `<tr><td>${ST.label(g.template)}</td><td class="num">${g.tasks}</td><td class="num">${ST.pct(g.model_pass_rate)}</td><td class="num">${ST.pct(g.model_mean_score)}</td><td class="num">${g.expert_mean_score == null ? "–" : ST.pct(g.expert_mean_score)}</td></tr>`).join("") || '<tr><td colspan="5" class="muted">No runs yet.</td></tr>'}</table>
+      <div class="row" style="margin-top:12px"><input id="bt" type="number" placeholder="Task id" style="width:110px"><button class="primary" id="brun">Run baseline</button></div></div>
+      <div class="panel tight"><div class="table-wrap"><table><tr><th>Run</th><th>Task</th><th>Model</th><th>Score</th><th>Result</th></tr>
+      ${b.runs.map((r) => `<tr><td>${r.id}</td><td>#${r.task_id} ${ST.esc(r.title)}</td><td class="small">${ST.esc(r.model)}</td><td class="num">${ST.pct(r.score)}</td><td>${r.passed ? '<span class="tag ok">passed</span>' : '<span class="tag warn">failed</span>'}</td></tr>`).join("") || '<tr><td colspan="5" class="muted">No runs yet.</td></tr>'}</table></div></div></div>`;
+    $("brun").onclick = async () => {
+      $("brun").disabled = true; $("brun").textContent = "Running…";
+      try { const r = await ST.api("/api/admin/baselines", { method: "POST", body: { task_id: +$("bt").value } }); ST.toast(`Model ${r.passed ? "passed" : "failed"} (${ST.pct(r.score)})`); render(); }
+      catch (e) { ST.toast(e.message); $("brun").disabled = false; $("brun").textContent = "Run baseline"; }
+    };
+  } else if (tab === "leads") {
+    const ls = await ST.api("/api/admin/leads");
+    v.innerHTML = `<div class="panel tight"><div class="table-wrap"><table><tr><th>When</th><th>Type</th><th>Name</th><th>Email</th><th>Company</th><th>Message</th></tr>
+      ${ls.map((l) => `<tr><td class="small">${ST.date(l.created_at)}</td><td>${ST.label(l.kind)}</td><td>${ST.esc(l.name)}</td><td>${ST.esc(l.email)}</td><td>${ST.esc(l.company)}</td><td class="small">${ST.esc(l.message)}</td></tr>`).join("") || '<tr><td colspan="6" class="muted">No sign-ups yet. They come from the waitlist on the home page.</td></tr>'}</table></div></div>`;
   } else if (tab === "ledger") {
     const l = await ST.api("/api/admin/ledger");
     v.innerHTML = `<div class="kpis">
@@ -89,13 +130,13 @@ async function render() {
 }
 
 function files(did) {
-  return ["sft_chat.jsonl", "trajectories.jsonl", "rl_environments.jsonl", "datacard.md"].map((f) =>
+  return ["sft_chat.jsonl", "trajectories.jsonl", "preferences.jsonl", "rl_environments.jsonl", "datacard.md"].map((f) =>
     `<a href="#" data-dl="${did}/${f}" class="small">${f}</a>`).join(" · ");
 }
 document.addEventListener("click", async (e) => {
   const a = e.target.closest("[data-dl]"); if (!a) return;
   e.preventDefault();
-  const res = await fetch(`/api/market/datasets/${a.dataset.dl.replace("/", "/download/")}`, { headers: { "X-User-Id": ST.userId() } });
+  const res = await fetch(`/api/market/datasets/${a.dataset.dl.replace("/", "/download/")}`, { credentials: "same-origin" });
   if (!res.ok) return ST.toast("Download failed");
   const blob = await res.blob(); const u = URL.createObjectURL(blob);
   const link = document.createElement("a"); link.href = u; link.download = a.dataset.dl.replace("/", "_"); link.click();
@@ -112,7 +153,9 @@ async function detail(id) {
         <tr><td>License</td><td>${ST.esc(d.license)}</td></tr></table>
         <h3>You get</h3><ul class="tight small"><li><span class="mono">sft_chat.jsonl</span>: agent SFT conversations with reasoning + tool calls</li>
         <li><span class="mono">trajectories.jsonl</span>: full step records, observations, scores</li>
+        <li><span class="mono">preferences.jsonl</span>: reviewer-corrected steps as chosen/rejected pairs for DPO</li>
         <li><span class="mono">rl_environments.jsonl</span>: initial states + verifier, for RL and evals</li><li><span class="mono">datacard.md</span></li></ul>
+        ${d.model_gap && d.model_gap.length ? `<h3>Why models need this</h3><table><tr><th>Family</th><th>Frontier model pass rate</th><th>Expert score</th></tr>${d.model_gap.map((g) => `<tr><td>${ST.label(g.template)}</td><td class="num">${ST.pct(g.model_pass_rate)}</td><td class="num">${g.expert_mean_score == null ? "–" : ST.pct(g.expert_mean_score)}</td></tr>`).join("")}</table>` : ""}
         <div class="row" style="margin-top:12px"><b style="font-size:20px">${ST.money(d.price_cents)}</b><div class="spacer"></div>
           ${d.purchased ? files(d.id) : me.role === "buyer" ? `<button class="primary" id="buy">Buy dataset</button>` : '<span class="small muted">Switch to the buyer demo user to purchase.</span>'}</div></div>
       <div class="panel"><h2>Sample record</h2><p class="small muted">${ST.esc(s.task?.title || "")} · outcome ${ST.esc(s.outcome?.label)} · verification ${ST.pct(s.outcome?.verification_score)}</p>

@@ -9,6 +9,7 @@
 <main>
   <h1>Review queue</h1>
   <p class="muted" id="intro"></p>
+  <div class="kpis" id="rstats" style="margin-bottom:12px"></div>
   <div class="tabs" id="status-tabs"></div>
   <div class="rv">
     <div class="panel tight"><div class="table-wrap" style="max-height:75vh"><table id="queue"></table></div></div>
@@ -49,20 +50,67 @@ async function show(id) {
         <h3>Flags</h3><p>${r.flags.map((f) => `<span class="tag gray">${ST.label(f)}</span>`).join(" ") || '<span class="small muted">none</span>'}</p></div>
     </div>
     ${j.issues && j.issues.length ? `<div class="notice warn small" style="margin-top:8px"><b>Issues:</b> ${j.issues.map(ST.esc).join(" ")}</div>` : ""}
-    ${r.status === "needs_review" ? `
+    <h3>Reviews <span class="small muted">${r.required_reviews === 2 ? "· quality below the bar, so two independent approvals are needed" : "· one approval needed"}</span></h3>
+    ${r.reviews.length ? `<table>${r.reviews.map((x) => `<tr><td>${ST.esc(x.reviewer)}</td><td>${x.approve ? '<span class="tag ok">approve</span>' : '<span class="tag bad">reject</span>'}</td><td class="small">${ST.esc(x.notes)}</td></tr>`).join("")}</table>` : '<p class="small muted">No reviews yet.</p>'}
+    ${r.status === "needs_review" ? (r.reviews.some((x) => x.reviewer === ST.me.name) ? '<p class="small muted">You already reviewed this. Waiting for another reviewer.</p>' : `
       <div class="row" style="margin:14px 0"><input id="notes" placeholder="Notes for the author (optional)" style="flex:1;min-width:200px">
-        <button class="danger" id="rej">Reject</button><button class="primary" id="app">Approve</button></div>`
-      : `<p class="small muted">Reviewed ${ST.date(r.reviewed_at)}${r.review_notes ? ": " + ST.esc(r.review_notes) : ""}</p>`}
+        <button class="danger" id="rej">Reject</button><button class="primary" id="app">Approve</button></div>`)
+      : `<p class="small muted">Decided ${ST.date(r.reviewed_at)}${r.review_notes ? ": " + ST.esc(r.review_notes) : ""}</p>`}
     <div class="row"><h3>Trajectory</h3><div class="spacer"></div><label class="small"><input type="checkbox" id="obs"> show observations</label>
       <label class="small"><input type="checkbox" id="views"> show views</label></div>
+    <p class="small muted">Spot a weak explanation or a wrong step? Use <b>Fix step</b>. Your fix goes into the corrected training file, and the original vs. fixed pair becomes a preference example.</p>
     <div id="steps"></div>`;
-  const draw = () => $("steps").innerHTML = ST.stepsHTML(rec.steps, { showObs: $("obs").checked, hideViews: !$("views").checked });
+  const fixes = {}; (r.corrections || []).forEach((c) => fixes[c.step_i] = c);
+  const draw = () => {
+    $("steps").innerHTML = ST.stepsHTML(rec.steps, { showObs: $("obs").checked, hideViews: !$("views").checked });
+    $("steps").querySelectorAll(".step").forEach((el) => {
+      const m = el.querySelector(".act") && el.querySelector(".act").textContent.match(/^(\d+)\./);
+      if (!m) return;
+      const i = Number(m[1]), step = rec.steps.find((s) => s.i === i);
+      if (!step || !step.action || step.action.tool === "view") return;
+      if (fixes[i]) el.insertAdjacentHTML("beforeend", `<div class="notice ok small" style="margin-top:6px"><b>Fixed (${ST.label(fixes[i].issue)}):</b> ${ST.esc(fixes[i].corrected_thought || "")} ${fixes[i].corrected_action ? `<span class="mono">${ST.esc(fixes[i].corrected_action.tool)}(${ST.esc(JSON.stringify(fixes[i].corrected_action.args))})</span>` : ""}</div>`);
+      const b = document.createElement("button"); b.textContent = fixes[i] ? "Edit fix" : "Fix step"; b.className = "small"; b.style.marginTop = "6px";
+      b.onclick = () => openFix(el, step);
+      el.appendChild(b);
+    });
+  };
+  const openFix = (el, step) => {
+    if (el.querySelector(".fix")) return;
+    el.insertAdjacentHTML("beforeend", `<div class="fix grid" style="margin-top:8px;gap:6px">
+      <select class="iss"><option value="weak_reasoning">The reasoning is weak or wrong</option><option value="wrong_action">The action is wrong</option><option value="both">Both</option></select>
+      <textarea class="th" rows="2" placeholder="Better reasoning for this step">${ST.esc(step.thought || "")}</textarea>
+      <textarea class="ac mono hidden" rows="2">${ST.esc(JSON.stringify(step.action))}</textarea>
+      <input class="nt" placeholder="Note (optional)">
+      <div class="row"><button class="primary sv">Save fix</button><button class="cx">Cancel</button></div></div>`);
+    const f = el.querySelector(".fix");
+    const sync = () => f.querySelector(".ac").classList.toggle("hidden", f.querySelector(".iss").value === "weak_reasoning");
+    f.querySelector(".iss").onchange = sync;
+    f.querySelector(".cx").onclick = () => f.remove();
+    f.querySelector(".sv").onclick = async () => {
+      const issue = f.querySelector(".iss").value;
+      let action = null;
+      if (issue !== "weak_reasoning") { try { action = JSON.parse(f.querySelector(".ac").value); } catch (e) { return ST.toast("The action must be JSON like {\"tool\": ..., \"args\": {...}}"); } }
+      try {
+        await ST.api(`/api/review/records/${id}/corrections`, { method: "POST", body: { step_i: step.i, issue,
+          corrected_thought: f.querySelector(".th").value, corrected_action: action, note: f.querySelector(".nt").value } });
+        ST.toast("Fix saved"); show(id); loadStats();
+      } catch (e) { ST.toast(e.message); }
+    };
+  };
   $("obs").onchange = draw; $("views").onchange = draw; draw();
   const decide = async (approve) => {
-    await ST.api("/api/review/records/" + id, { method: "POST", body: { approve, notes: $("notes").value } });
-    ST.toast(approve ? "Approved" : "Rejected"); loadQueue(); show(id);
+    const res = await ST.api("/api/review/records/" + id, { method: "POST", body: { approve, notes: $("notes").value } });
+    ST.toast(res.status === "needs_review" ? `Recorded (${res.approvals}/${res.required} approvals). Needs another reviewer.` : ST.label(res.status));
+    loadQueue(); show(id); loadStats();
   };
   if ($("app")) { $("app").onclick = () => decide(true); $("rej").onclick = () => decide(false); }
+}
+
+async function loadStats() {
+  const s = await ST.api("/api/review/stats");
+  $("rstats").innerHTML = `<div class="kpi"><div class="v">${s.agreement == null ? "–" : ST.pct(s.agreement)}</div><div class="l">Reviewer agreement (${s.multi_reviewed} double-reviewed)</div></div>
+    <div class="kpi"><div class="v">${s.corrections}</div><div class="l">Step fixes → preference pairs</div></div>
+    <div class="kpi"><div class="v">${ST.pct(s.double_review_below)}</div><div class="l">Two reviewers below this quality</div></div>`;
 }
 
 (async () => {
@@ -70,7 +118,7 @@ async function show(id) {
   $("intro").textContent = me.org_kind === "platform"
     ? "Marketplace records from experts. Approving pays the expert's task reward and makes the record eligible for datasets."
     : `Records captured inside ${me.org}. Approved records can be exported for post-training. Every record you open is logged.`;
-  loadQueue();
+  loadQueue(); loadStats();
 })();
 </script>
 </body></html>

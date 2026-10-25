@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SeaTrail · Expert work into agent training data</title>
+<meta name="description" content="SeaTrail records how experts do real work, with their reasoning, and turns it into verified SFT, preference, RL and eval data for AI agents. Self-hosted for enterprises, or bought as verified datasets.">
+<meta property="og:title" content="SeaTrail: expert work into agent training data">
+<meta property="og:description" content="Record how your best people work. Get verified SFT, DPO, RL environments and evals for your agents. Self-hosted, consent-first.">
+<link rel="stylesheet" href="/static/app.css">
+<style>
+  body { font-size: 15px; }
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 0 20px; }
+  .nav { display: flex; align-items: center; gap: 18px; padding: 16px 0; flex-wrap: wrap; }
+  .nav .logo { font-weight: 800; font-size: 18px; color: var(--ink); text-decoration: none; letter-spacing: .2px; }
+  .nav a.l { color: var(--muted); text-decoration: none; }
+  .nav a.l:hover { color: var(--ink); }
+  .nav .sp { flex: 1; }
+  .hero { padding: 56px 0 40px; display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 40px; align-items: center; }
+  .hero h1 { font-size: clamp(30px, 4.4vw, 48px); line-height: 1.08; margin: 0 0 16px; letter-spacing: -.5px; }
+  .hero p.lead { font-size: 18px; color: var(--muted); margin: 0 0 22px; max-width: 560px; }
+  .cta { display: flex; gap: 10px; flex-wrap: wrap; }
+  .btn.big { padding: 11px 20px; font-size: 15px; border-radius: 9px; }
+  .eyebrow { display: inline-block; font-size: 12px; font-weight: 600; letter-spacing: .6px; text-transform: uppercase; color: var(--brand); margin-bottom: 12px; }
+  .trace { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 16px; box-shadow: 0 12px 40px rgba(15, 61, 62, .08); font-size: 13px; }
+  .trace .hd { display: flex; justify-content: space-between; color: var(--muted); font-size: 12px; margin-bottom: 10px; }
+  .trace .s { border-left: 3px solid var(--line); padding: 4px 0 8px 10px; margin-left: 4px; }
+  .trace .s.th { border-color: var(--brand); }
+  .trace .why { color: var(--ink); }
+  .trace .act { font-family: var(--mono); font-size: 12px; color: var(--brand); }
+  .trace .chk { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+  section.band { padding: 56px 0; border-top: 1px solid var(--line); }
+  section.band h2 { font-size: 28px; margin: 0 0 8px; letter-spacing: -.3px; }
+  section.band p.sub { color: var(--muted); margin: 0 0 28px; max-width: 720px; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 18px; }
+  .card h3 { margin: 0 0 6px; font-size: 16px; }
+  .card p { margin: 0; color: var(--muted); font-size: 14px; }
+  .ed { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 18px; }
+  .ed .card { padding: 22px; }
+  .ed ul { margin: 12px 0 16px; padding-left: 18px; color: var(--ink); font-size: 14px; }
+  .ed li { margin: 4px 0; }
+  .cmp { overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); }
+  .cmp table { min-width: 720px; }
+  .cmp th, .cmp td { padding: 10px 12px; font-size: 14px; }
+  .cmp th { background: var(--panel); position: static; }
+  .cmp td.us { background: var(--brand-soft); font-weight: 600; }
+  .cmp th.us { color: var(--brand); }
+  .y { color: var(--ok); } .n { color: var(--muted); }
+  .steps4 { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; counter-reset: s; }
+  .steps4 .card::before { counter-increment: s; content: counter(s); display: inline-grid; place-items: center; width: 26px; height: 26px; border-radius: 50%; background: var(--brand); color: var(--brand-ink); font-weight: 700; font-size: 13px; margin-bottom: 10px; }
+  .price { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; }
+  .price .card { display: flex; flex-direction: column; }
+  .price .amt { font-size: 30px; font-weight: 800; margin: 8px 0 2px; }
+  .price .per { color: var(--muted); font-size: 13px; }
+  .price ul { padding-left: 18px; font-size: 14px; flex: 1; }
+  .price .card.hi { border-color: var(--brand); box-shadow: 0 0 0 1px var(--brand) inset; }
+  .ptabs { display: inline-flex; border: 1px solid var(--line-strong); border-radius: 9px; overflow: hidden; margin-bottom: 18px; }
+  .ptabs button { border: 0; border-radius: 0; padding: 8px 14px; background: var(--panel); }
+  .ptabs button.on { background: var(--brand); color: var(--brand-ink); }
+  .wl { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 28px; align-items: start; }
+  .wl form { display: grid; gap: 10px; }
+  .wl input, .wl select, .wl textarea { width: 100%; padding: 9px 10px; }
+  details { border-bottom: 1px solid var(--line); padding: 12px 0; }
+  details summary { cursor: pointer; font-weight: 600; }
+  details p { color: var(--muted); margin: 8px 0 0; }
+  footer { border-top: 1px solid var(--line); padding: 28px 0 40px; color: var(--muted); font-size: 13px; }
+  @media (max-width: 860px) { .hero, .wl { grid-template-columns: 1fr; } .hero { padding-top: 28px; } .nav a.l.opt { display: none; } }
+</style>
+</head><body>
+<div class="wrap">
+  <nav class="nav">
+    <a class="logo" href="/">SeaTrail</a>
+    <a class="l opt" href="#enterprise">Enterprise</a>
+    <a class="l opt" href="#data">Datasets</a>
+    <a class="l opt" href="#experts">For experts</a>
+    <a class="l opt" href="#pricing">Pricing</a>
+    <span class="sp"></span>
+    <a class="l" href="/login">Sign in</a>
+    <a class="btn primary" href="#waitlist">Book a pilot</a>
+  </nav>
+
+  <header class="hero">
+    <div>
+      <span class="eyebrow">Post-training data for AI agents</span>
+      <h1>Your experts already know how the work gets done. Teach it to your agents.</h1>
+      <p class="lead">SeaTrail records how skilled people do real work, with the reasoning behind every step, and turns it into verified training data: SFT, preference pairs, RL environments and evals. Run it inside your company, or buy verified datasets from our expert network.</p>
+      <div class="cta">
+        <a class="btn primary big" href="#waitlist">Book a pilot</a>
+        <a class="btn big" href="/login" id="try">Try the live demo</a>
+      </div>
+      <p class="small muted" style="margin-top:12px">Starting with finance and accounting: reconciliations, AP matching, expense audit.</p>
+    </div>
+    <div class="trace" aria-label="Example of a captured step-by-step trace">
+      <div class="hd"><span>AP three-way match · captured trace</span><span>quality 91%</span></div>
+      <div class="s th"><div class="why">"INV-31877 bills 120 units but receiving shows 100 on PO-5120, so this is a quantity variance. Hold it."</div>
+        <div class="act">edit_cell(Invoices, INV-31877, decision="hold")</div></div>
+      <div class="s th"><div class="why">"Unit price $14.10 vs $13.50 on the PO is 4.4% over our 2% tolerance."</div>
+        <div class="act">edit_cell(Invoices, INV-31902, reason="price_variance")</div></div>
+      <div class="s"><div class="act">send_email(to="ap@vendor.example", subject="Credit memo for INV-31902")</div></div>
+      <div class="chk"><span class="tag ok">verified vs answer key</span><span class="tag ok">PII redacted</span><span class="tag ok">2 reviewers</span><span class="tag warn">frontier model failed</span></div>
+    </div>
+  </header>
+
+  <section class="band">
+    <h2>Agents fail on the judgment calls nobody wrote down</h2>
+    <p class="sub">Models can click through software. What they lack is how your best people decide: which mismatch matters, which exception to escalate, what to check first. That knowledge lives in people's heads and in the work itself. Generic labeled data does not have it, and screen recordings without reasoning do not teach it.</p>
+    <div class="cards">
+      <div class="card"><h3>Steps plus reasons</h3><p>Every action is paired with the expert's spoken or typed reason, so models learn the decision, not just the click.</p></div>
+      <div class="card"><h3>Verified, not just labeled</h3><p>Sandbox tasks are graded against a hidden answer key. Real-work captures are checked by model rubric and two-person review.</p></div>
+      <div class="card"><h3>Every training format</h3><p>Chat SFT with tool calls, reviewer-corrected DPO pairs, RL environments with verifiers, and eval sets with checkpoints.</p></div>
+      <div class="card"><h3>Where to collect next</h3><p>Process discovery maps how work actually flows and shows which workflows have the least training coverage.</p></div>
+    </div>
+  </section>
+
+  <section class="band" id="enterprise">
+    <h2>Two ways to use SeaTrail</h2>
+    <p class="sub">One engine: capture, convert, assess. Pick where the expertise comes from.</p>
+    <div class="ed">
+      <div class="card">
+        <span class="tag">Enterprise edition</span>
+        <h3 style="margin-top:10px;font-size:20px">Train on your own experts' real work</h3>
+        <p>Deploy in your cloud. Employees opt in and record work in approved internal apps with a browser recorder. The data never leaves you and is yours to post-train your own agents.</p>
+        <ul>
+          <li>Consent per employee, host allowlist, field masking, sensitive-term redaction</li>
+          <li>Employees review and delete steps before anything is submitted</li>
+          <li>Model grading off by default, or routed through your own gateway</li>
+          <li>Retention purge and a full audit log of every view, approval and export</li>
+          <li>Process discovery: workflow maps, variants, coverage and what to record next</li>
+        </ul>
+        <a class="btn primary" href="#waitlist" data-kind="enterprise">Book a pilot</a>
+      </div>
+      <div class="card" id="data">
+        <span class="tag">Expert network &amp; datasets</span>
+        <h3 style="margin-top:10px;font-size:20px">Buy verified expert trajectories</h3>
+        <p>Credentialed professionals solve realistic tasks on synthetic company data while narrating. We run a frontier model on the same task, so you know exactly where models fall short.</p>
+        <ul>
+          <li>Every record passes an automatic answer-key check, model review and human review</li>
+          <li>Measured model-vs-expert gap shipped with every dataset</li>
+          <li>Custom orders on fresh tasks written for you, exclusive license</li>
+          <li>Experts are qualified by graded tests, not résumés</li>
+        </ul>
+        <a class="btn primary" href="#waitlist" data-kind="buyer">Request a sample</a>
+      </div>
+    </div>
+  </section>
+
+  <section class="band">
+    <h2>How SeaTrail compares</h2>
+    <p class="sub">Expert-data vendors sell labor. Task-mining tools sell process charts. SeaTrail turns real expertise into data a model can train and be graded on.</p>
+    <div class="cmp"><table>
+      <tr><th></th><th>Expert data vendors</th><th>Task / process mining</th><th>Screen recorders &amp; RPA</th><th class="us">SeaTrail</th></tr>
+      <tr><td>Captures the reasoning behind each step</td><td>Sometimes, written after the fact</td><td class="n">No</td><td class="n">No</td><td class="us">Yes, spoken while working</td></tr>
+      <tr><td>Automatically verified outcomes</td><td>Rubric review only</td><td class="n">No</td><td class="n">No</td><td class="us">Hidden answer key + rubric + 2 reviewers</td></tr>
+      <tr><td>Training formats out of the box</td><td>SFT or ratings</td><td class="n">None</td><td class="n">Scripts</td><td class="us">SFT, DPO pairs, RL envs, evals</td></tr>
+      <tr><td>Runs on your own experts, in your network</td><td class="n">No</td><td>Yes</td><td>Yes</td><td class="us">Yes, self-hosted</td></tr>
+      <tr><td>Shows where frontier models fail</td><td class="n">Rarely</td><td class="n">No</td><td class="n">No</td><td class="us">Baseline run on every task</td></tr>
+      <tr><td>Tells you what to collect next</td><td class="n">No</td><td>Process maps only</td><td class="n">No</td><td class="us">Coverage + priority per workflow</td></tr>
+      <tr><td>Employee consent and edit before submit</td><td>n/a</td><td>Varies</td><td class="n">Rare</td><td class="us">Built in</td></tr>
+    </table></div>
+  </section>
+
+  <section class="band">
+    <h2>How it works</h2>
+    <div class="steps4">
+      <div class="card"><h3>Record</h3><p>A browser recorder (or our sandbox) logs every action. Experts think aloud by voice or text.</p></div>
+      <div class="card"><h3>Convert</h3><p>Events become reasoning → tool call → observation steps, with personal data redacted on the way.</p></div>
+      <div class="card"><h3>Assess</h3><p>Answer-key verification, reasoning coverage, near-duplicate detection and model rubric grading. Low scores get two reviewers.</p></div>
+      <div class="card"><h3>Export</h3><p>Reviewers fix weak steps; fixes become preference pairs. Export SFT, DPO, RL environments and evals.</p></div>
+    </div>
+  </section>
+
+  <section class="band" id="pricing">
+    <h2>Pricing</h2>
+    <div class="ptabs" role="tablist">
+      <button class="on" data-p="ent">Enterprise</button><button data-p="buy">Datasets</button><button data-p="exp">Experts</button>
+    </div>
+    <div class="price" data-pane="ent">
+      <div class="card"><h3>Pilot</h3><div class="amt">$0</div><div class="per">30 days</div>
+        <ul><li>Up to 10 recording seats</li><li>One workflow, set up with us</li><li>Hosted demo or your cloud</li><li>Training-data report at the end</li></ul>
+        <a class="btn" href="#waitlist" data-kind="enterprise">Start a pilot</a></div>
+      <div class="card hi"><h3>Team</h3><div class="amt">$79</div><div class="per">per recording seat / month, billed yearly</div>
+        <ul><li>Unlimited workflows and exports</li><li>Process discovery and coverage</li><li>Two-person review, step corrections</li><li>Email support</li></ul>
+        <a class="btn primary" href="#waitlist" data-kind="enterprise">Talk to us</a></div>
+      <div class="card"><h3>Enterprise</h3><div class="amt">Custom</div><div class="per">self-hosted, annual</div>
+        <ul><li>Deploy in your VPC or on-prem</li><li>SSO, your model gateway, data residency</li><li>Custom recorders and connectors</li><li>Security review support</li></ul>
+        <a class="btn" href="#waitlist" data-kind="enterprise">Contact sales</a></div>
+    </div>
+    <div class="price hidden" data-pane="buy">
+      <div class="card"><h3>Sample</h3><div class="amt">Free</div><div class="per">under NDA</div>
+        <ul><li>Records from the catalog</li><li>Full schema and datacard</li><li>Model-vs-expert gap report</li></ul>
+        <a class="btn" href="#waitlist" data-kind="buyer">Request sample</a></div>
+      <div class="card hi"><h3>Catalog datasets</h3><div class="amt">From $15k</div><div class="per">per dataset, commercial training license</div>
+        <ul><li>Verified expert trajectories</li><li>SFT, DPO, RL envs and evals</li><li>Updates as new records are approved</li></ul>
+        <a class="btn primary" href="/login?role=buyer#signup">Browse catalog</a></div>
+      <div class="card"><h3>Custom orders</h3><div class="amt">Quote</div><div class="per">per verified record</div>
+        <ul><li>Fresh tasks written for you</li><li>Exclusive license</li><li>Pay only for records that pass</li></ul>
+        <a class="btn" href="#waitlist" data-kind="buyer">Get a quote</a></div>
+    </div>
+    <div class="price hidden" data-pane="exp">
+      <div class="card hi" id="experts"><h3>Earn as an expert</h3><div class="amt">Paid per task</div><div class="per">plus 20% of every dataset sale that includes your work</div>
+        <ul><li>Take a short graded test in your specialty</li><li>Work on realistic cases, at your own pace</li><li>See your quality score before you submit</li><li>Bonus on tasks that today's AI fails</li></ul>
+        <a class="btn primary" href="/login?role=expert#signup">Apply as an expert</a></div>
+      <div class="card"><h3>Who we're looking for</h3><p>CPAs, controllers, AP and AR leads, auditors and FP&amp;A analysts with real-world experience. More fields soon.</p></div>
+    </div>
+  </section>
+
+  <section class="band" id="waitlist">
+    <div class="wl">
+      <div>
+        <h2>Book a pilot or join the waitlist</h2>
+        <p class="sub">Tell us what you want to train. We reply within two business days.</p>
+        <details open><summary>Who owns the data in the enterprise edition?</summary><p>You do. It runs in your environment, recordings stay on your servers, and nothing is used to train anyone else's model.</p></details>
+        <details><summary>Do employees know they are being recorded?</summary><p>Yes. Nothing is recorded without each employee's opt-in, recording only works on apps your admin allows, and employees review and can delete anything before it is submitted.</p></details>
+        <details><summary>Is the marketplace data real company data?</summary><p>No. Expert tasks run on synthetic companies, so there is no client data and no confidentiality problem. The expertise is real; the books are not.</p></details>
+        <details><summary>Which models does it work with?</summary><p>Exports are plain JSONL in common chat and tool-call formats, so they work with any open-weight model or fine-tuning API.</p></details>
+      </div>
+      <div class="card">
+        <form id="lead">
+          <label class="f">I'm interested as
+            <select name="kind"><option value="enterprise">A company that wants to train its own agents</option><option value="buyer">A model builder buying data</option><option value="expert">An expert who wants paid work</option></select></label>
+          <label class="f">Name<input name="name" autocomplete="name"></label>
+          <label class="f">Work email<input name="email" type="email" required autocomplete="email"></label>
+          <label class="f">Company<input name="company" autocomplete="organization"></label>
+          <label class="f">What do you want to automate or train?<textarea name="message" rows="3"></textarea></label>
+          <button class="primary btn big" type="submit">Send</button>
+          <div id="lead-msg" class="small"></div>
+        </form>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <div class="row" style="flex-wrap:wrap;gap:16px"><b style="color:var(--ink)">SeaTrail</b><span>Expert work into agent training data.</span><span class="spacer"></span>
+      <a href="/login">Sign in</a><a href="#pricing">Pricing</a><a href="#waitlist">Contact</a></div>
+  </footer>
+</div>
+<script>
+document.querySelectorAll(".ptabs button").forEach((b) => b.onclick = () => {
+  document.querySelectorAll(".ptabs button").forEach((x) => x.classList.toggle("on", x === b));
+  document.querySelectorAll("[data-pane]").forEach((p) => p.classList.toggle("hidden", p.dataset.pane !== b.dataset.p));
+});
+document.querySelectorAll("[data-kind]").forEach((a) => a.addEventListener("click", () => {
+  document.querySelector('#lead [name=kind]').value = a.dataset.kind;
+}));
+fetch("/api/auth/config").then((r) => r.json()).then((c) => { if (!c.demo_mode) document.getElementById("try").textContent = "Sign in"; }).catch(() => {});
+document.getElementById("lead").onsubmit = async (e) => {
+  e.preventDefault();
+  const msg = document.getElementById("lead-msg");
+  const body = Object.fromEntries(new FormData(e.target).entries());
+  const res = await fetch("/api/leads", { method: "POST", headers: { "Content-Type": "application/json", "X-Requested-With": "seatrail" }, body: JSON.stringify(body) });
+  const data = await res.json().catch(() => ({}));
+  if (res.ok) { e.target.reset(); msg.innerHTML = '<div class="notice ok">Thanks. We will be in touch soon.</div>'; }
+  else msg.innerHTML = `<div class="notice bad">${(data.detail || "Something went wrong").replace(/</g, "&lt;")}</div>`;
+};
+</script>
+</body></html>

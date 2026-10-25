@@ -11,7 +11,7 @@ import secrets
 from pathlib import Path
 
 from . import config, db
-from .enterprise import write_files
+from .enterprise import with_corrections, write_files
 
 PLATFORM_ORG = 0
 
@@ -23,7 +23,9 @@ class MarketError(ValueError):
 def create_dataset(admin_id: int, name: str, description: str, price_cents: int, template: str | None = None,
                    min_quality: float = 0.0, license_: str = "Commercial training license, no redistribution",
                    list_now: bool = True) -> dict:
-    sql = "SELECT id FROM records WHERE org_id=? AND source='sandbox' AND status='approved' AND quality_score>=?"
+    # Records made for a buyer's custom request are exclusive to that buyer and never go in the catalog.
+    sql = ("SELECT id FROM records WHERE org_id=? AND source='sandbox' AND status='approved' AND quality_score>=?"
+           " AND task_id NOT IN (SELECT id FROM tasks WHERE request_id IS NOT NULL)")
     args: list = [PLATFORM_ORG, min_quality]
     if template:
         sql += " AND template=?"
@@ -144,9 +146,9 @@ def purchase(did: int, buyer: dict, payment_ref: str | None = None) -> dict:
 def build_download(did: int, buyer: dict) -> Path:
     if not db.q1("SELECT id FROM orders WHERE dataset_id=? AND buyer_id=?", did, buyer["id"]):
         raise PermissionError("purchase required")
-    rows = db.q("SELECT r.record, r.quality_score FROM records r JOIN dataset_items i ON i.record_id=r.id"
+    rows = db.q("SELECT r.id, r.record, r.quality_score FROM records r JOIN dataset_items i ON i.record_id=r.id"
                 " WHERE i.dataset_id=? ORDER BY r.id", did)
-    records = [db.loads(r["record"]) for r in rows]
+    records = [with_corrections(r["id"], db.loads(r["record"])) for r in rows]
     out = config.DATA_DIR / "deliveries" / f"buyer_{buyer['id']}" / f"dataset_{did}"
     out.mkdir(parents=True, exist_ok=True)
     write_files(out, records, "both", title=get_dataset(did)["name"])
@@ -171,3 +173,86 @@ def ledger() -> dict:
             "seller_net_cents": o["seller"], "expert_revenue_share_cents": o["pool"],
             "task_rewards_paid_cents": rewards, "take_rate_open_market": config.TAKE_RATE,
             "expert_revenue_share": config.EXPERT_REVENUE_SHARE, "open_marketplace": config.OPEN_MARKETPLACE}
+
+
+# ---------------------------------------------------------------------------
+# Custom data requests: a buyer orders N verified trajectories for a task family; we generate
+# fresh tasks for it (never seen by anyone else), experts complete them, and the approved records
+# are delivered as a private dataset.
+# ---------------------------------------------------------------------------
+REQUEST_SEED_BASE = 100000
+
+
+def create_request(buyer: dict, template: str, quantity: int, min_quality: float, budget_cents: int,
+                   notes: str = "") -> dict:
+    from .tasks import TEMPLATES
+    if template not in TEMPLATES:
+        raise MarketError(f"unknown task family {template!r}")
+    if not 1 <= quantity <= 1000:
+        raise MarketError("quantity must be between 1 and 1000")
+    if budget_cents <= 0:
+        raise MarketError("budget must be positive")
+    rid = db.x("INSERT INTO data_requests (buyer_id, template, quantity, min_quality, budget_cents, notes, status,"
+               " created_at) VALUES (?,?,?,?,?,?, 'open', ?)", buyer["id"], template, quantity,
+               max(0.0, min(1.0, float(min_quality))), budget_cents, notes[:2000], db.now())
+    db.audit(PLATFORM_ORG, buyer["id"], "request.create", f"request:{rid}", template=template, quantity=quantity)
+    return get_request(rid)
+
+
+def get_request(rid: int) -> dict:
+    r = db.q1("SELECT * FROM data_requests WHERE id=?", rid)
+    if not r:
+        raise KeyError("request not found")
+    tasks = db.q("SELECT id FROM tasks WHERE request_id=?", rid)
+    approved = db.q("SELECT r.id FROM records r JOIN tasks t ON t.id=r.task_id WHERE t.request_id=? AND"
+                    " r.status='approved' AND r.quality_score>=?", rid, r["min_quality"])
+    r["progress"] = {"tasks": len(tasks), "approved_records": len(approved)}
+    return r
+
+
+def list_requests(buyer_id: int | None = None) -> list[dict]:
+    sql = "SELECT id FROM data_requests" + (" WHERE buyer_id=?" if buyer_id is not None else "") + " ORDER BY id DESC"
+    return [get_request(r["id"]) for r in db.q(sql, *([buyer_id] if buyer_id is not None else []))]
+
+
+def produce_request(admin_id: int, rid: int) -> dict:
+    from . import tasks
+    r = get_request(rid)
+    if r["status"] not in ("open", "in_production"):
+        raise MarketError(f"request is {r['status']}")
+    have = r["progress"]["tasks"]
+    per_task = max(1, int(r["budget_cents"] * 0.6) // r["quantity"])  # about 60% of the budget goes to experts
+    for k in range(have, r["quantity"]):
+        tid = tasks.create_task(r["template"], REQUEST_SEED_BASE + rid * 1000 + k)
+        db.x("UPDATE tasks SET request_id=?, reward_cents=? WHERE id=?", rid, int(per_task), tid)
+    db.x("UPDATE data_requests SET status='in_production' WHERE id=?", rid)
+    db.audit(PLATFORM_ORG, admin_id, "request.produce", f"request:{rid}")
+    return get_request(rid)
+
+
+def deliver_request(admin_id: int, rid: int) -> dict:
+    r = get_request(rid)
+    if r["status"] != "in_production":
+        raise MarketError("request is not in production")
+    ids = [x["id"] for x in db.q("SELECT r.id FROM records r JOIN tasks t ON t.id=r.task_id WHERE t.request_id=?"
+                                 " AND r.status='approved' AND r.quality_score>=?", rid, r["min_quality"])]
+    if not ids:
+        raise MarketError("no approved records for this request yet")
+    buyer = db.q1("SELECT * FROM users WHERE id=?", r["buyer_id"])
+    with db.tx() as c:
+        cur = c.execute("INSERT INTO datasets (seller_id, name, domain, description, price_cents, license, status,"
+                        " created_at) VALUES (?,?,?,?,?,?, 'unlisted', ?)",
+                        (config.PLATFORM_SELLER_ID, f"Custom request #{rid}: {r['template']}", "accounting",
+                         f"{len(ids)} verified trajectories made for {buyer['name']}. Exclusive to this buyer.",
+                         r["budget_cents"], "Exclusive commercial training license", db.now()))
+        did = cur.lastrowid
+        c.executemany("INSERT INTO dataset_items (dataset_id, record_id) VALUES (?,?)", [(did, i) for i in ids])
+        c.execute("UPDATE data_requests SET status='delivered', dataset_id=? WHERE id=?", (did, rid))
+    # Sell the private dataset to the requesting buyer (temporarily list it so purchase() accepts it).
+    db.x("UPDATE datasets SET status='listed' WHERE id=?", did)
+    try:
+        purchase(did, buyer)
+    finally:
+        db.x("UPDATE datasets SET status='unlisted' WHERE id=?", did)
+    db.audit(PLATFORM_ORG, admin_id, "request.deliver", f"request:{rid}", dataset=did, records=len(ids))
+    return get_request(rid)

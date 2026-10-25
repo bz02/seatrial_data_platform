@@ -192,23 +192,89 @@ def submit(session_id: int) -> int:
     return rid
 
 
-def review(record_id: int, reviewer_id: int, approve: bool, notes: str = "") -> dict:
+def required_reviews(quality_score: float) -> int:
+    return 2 if quality_score < config.DOUBLE_REVIEW_BELOW else 1
+
+
+def review(record_id: int, reviewer_id: int, approve: bool, notes: str = "", scores: dict | None = None) -> dict:
+    """Record one reviewer's verdict. Low-scoring records need two independent approvals; a split
+    decision waits for a third reviewer. The author can never review their own record."""
     r = db.q1("SELECT * FROM records WHERE id=?", record_id)
     if not r:
         raise KeyError("record not found")
     if r["status"] != "needs_review":
         raise SubmitError(f"record is already {r['status']}")
-    status = "approved" if approve else "rejected"
+    if r["user_id"] == reviewer_id:
+        raise PermissionError("you can't review your own record")
+    if db.q1("SELECT id FROM record_reviews WHERE record_id=? AND reviewer_id=?", record_id, reviewer_id):
+        raise SubmitError("you already reviewed this record")
+    need = required_reviews(r["quality_score"])
     with db.tx() as c:
-        c.execute("UPDATE records SET status=?, reviewer_id=?, review_notes=?, reviewed_at=? WHERE id=?",
-                  (status, reviewer_id, notes, db.now(), record_id))
-        # Marketplace experts earn the task reward when their record is approved.
-        if approve and r["source"] == "sandbox" and r["task_id"]:
-            reward = c.execute("SELECT reward_cents FROM tasks WHERE id=?", (r["task_id"],)).fetchone()[0]
-            c.execute("INSERT INTO payouts (expert_id, kind, amount_cents, record_id, created_at)"
-                      " VALUES (?, 'task_reward', ?, ?, ?)", (r["user_id"], reward, record_id, db.now()))
-    db.audit(r["org_id"], reviewer_id, f"record.{status}", f"record:{record_id}", notes=notes)
-    return {"id": record_id, "status": status}
+        c.execute("INSERT INTO record_reviews (record_id, reviewer_id, approve, scores, notes, created_at)"
+                  " VALUES (?,?,?,?,?,?)", (record_id, reviewer_id, int(bool(approve)), db.dumps(scores or {}),
+                                            notes, db.now()))
+        votes = c.execute("SELECT approve FROM record_reviews WHERE record_id=?", (record_id,)).fetchall()
+        yes = sum(v[0] for v in votes)
+        no = len(votes) - yes
+        status = "needs_review"
+        if yes >= need and yes > no:
+            status = "approved"
+        elif no >= need and no > yes:
+            status = "rejected"
+        if status != "needs_review":
+            c.execute("UPDATE records SET status=?, reviewer_id=?, review_notes=?, reviewed_at=? WHERE id=?",
+                      (status, reviewer_id, notes, db.now(), record_id))
+            # Marketplace experts earn the task reward (with a bonus on tasks the model baseline failed).
+            if status == "approved" and r["source"] == "sandbox" and r["task_id"]:
+                c.execute("INSERT INTO payouts (expert_id, kind, amount_cents, record_id, created_at)"
+                          " VALUES (?, 'task_reward', ?, ?, ?)",
+                          (r["user_id"], task_reward(r["task_id"]), record_id, db.now()))
+    db.audit(r["org_id"], reviewer_id, "record.review", f"record:{record_id}", approve=bool(approve))
+    if status != "needs_review":
+        db.audit(r["org_id"], reviewer_id, f"record.{status}", f"record:{record_id}", notes=notes)
+    return {"id": record_id, "status": status, "approvals": yes, "rejections": no, "required": need}
+
+
+def task_reward(task_id: int) -> int:
+    t = db.q1("SELECT reward_cents FROM tasks WHERE id=?", task_id)
+    b = db.q1("SELECT passed FROM baselines WHERE task_id=? ORDER BY id DESC LIMIT 1", task_id)
+    bonus = config.HARD_TASK_BONUS if b and not b["passed"] else 1.0
+    return int(round(t["reward_cents"] * bonus))
+
+
+def reviewer_agreement(org_id: int) -> dict:
+    """Share of multi-reviewed records where every reviewer gave the same verdict."""
+    rows = db.q("SELECT rr.record_id, MIN(rr.approve) lo, MAX(rr.approve) hi, COUNT(*) n FROM record_reviews rr"
+                " JOIN records r ON r.id=rr.record_id WHERE r.org_id=? GROUP BY rr.record_id HAVING n>=2", org_id)
+    agree = sum(1 for r in rows if r["lo"] == r["hi"])
+    return {"multi_reviewed": len(rows), "agreement": round(agree / len(rows), 3) if rows else None}
+
+
+def add_correction(record_id: int, reviewer: dict, step_i: int, issue: str, corrected_thought: str = "",
+                   corrected_action: dict | None = None, note: str = "") -> int:
+    r = db.q1("SELECT org_id, user_id, record FROM records WHERE id=?", record_id)
+    if not r or r["org_id"] != reviewer["org_id"]:
+        raise KeyError("record not found")
+    if r["user_id"] == reviewer["id"]:
+        raise PermissionError("you can't correct your own record")
+    if issue not in ("wrong_action", "weak_reasoning", "both"):
+        raise ValueError("issue must be wrong_action, weak_reasoning or both")
+    steps = {s["i"]: s for s in db.loads(r["record"])["steps"]}
+    if step_i not in steps or steps[step_i]["action"] is None:
+        raise ValueError("no such action step")
+    if issue in ("weak_reasoning", "both") and not corrected_thought.strip():
+        raise ValueError("write the better reasoning")
+    if issue in ("wrong_action", "both"):
+        if not corrected_action or not corrected_action.get("tool") or not isinstance(corrected_action.get("args"), dict):
+            raise ValueError("give the correct action as {tool, args}")
+    else:
+        corrected_action = None
+    cid = db.x("INSERT INTO step_corrections (record_id, step_i, reviewer_id, issue, corrected_thought,"
+               " corrected_action, note, created_at) VALUES (?,?,?,?,?,?,?,?)", record_id, step_i, reviewer["id"],
+               issue, corrected_thought.strip(), db.dumps(corrected_action) if corrected_action else None, note,
+               db.now())
+    db.audit(r["org_id"], reviewer["id"], "record.correct_step", f"record:{record_id}", step=step_i, issue=issue)
+    return cid
 
 
 def task_summary(task_row: dict) -> dict:

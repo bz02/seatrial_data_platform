@@ -16,8 +16,10 @@ def test_full_marketplace_flow(client, env):
     dana, luis = env["dana@experts.example"], env["luis@experts.example"]
     admin, buyer = env["admin@seatrail.example"], env["data@frontier-lab.example"]
 
-    tasks = client.get("/api/tasks", headers=as_user(dana)).json()
-    assert len(tasks) == 12 and "answer_key" not in tasks[0]
+    all_tasks = client.get("/api/tasks", headers=as_user(dana)).json()
+    tasks = [t for t in all_tasks if t["purpose"] == "work"]
+    assert len(tasks) == 12 and "answer_key" not in tasks[0] and not tasks[0]["locked"]
+    assert sum(t["purpose"] == "qualification" for t in all_tasks) == 3
 
     sid = _run(client, dana, tasks[0]["id"], seed=1)
     s = client.get(f"/api/sessions/{sid}", headers=as_user(dana)).json()

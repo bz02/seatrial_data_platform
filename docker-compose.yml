@@ -1,0 +1,10 @@
+# Self-hosted deployment (also the enterprise install): docker compose up -d
+services:
+  seatrail:
+    build: .
+    ports: ["8000:8000"]
+    env_file: [.env]
+    volumes: ["seatrail-data:/data"]
+    restart: unless-stopped
+volumes:
+  seatrail-data:

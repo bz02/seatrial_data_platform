@@ -97,5 +97,14 @@ pre.json { font-family: var(--mono); font-size: 11px; background: var(--bg); bor
 
 @media (max-width: 720px) {
   .topbar .user { margin-left: 0; width: 100%; }
-  .topbar select { max-width: 100%; flex: 1; }
+  .topbar select { max-width: 100%; flex: 1; min-width: 0; width: 0; }
 }
+.topbar button.ghost { background: transparent; color: #cfe7e4; border-color: rgba(255,255,255,.25); padding: 4px 10px; }
+.topbar button.ghost:hover { color: #fff; border-color: #fff; }
+.auth { max-width: 420px; margin: 48px auto; }
+.auth .panel { padding: 20px; }
+.auth form { display: grid; gap: 12px; }
+.auth input, .auth select { width: 100%; }
+.demo-list { display: grid; gap: 6px; }
+.demo-list button { text-align: left; display: flex; justify-content: space-between; gap: 8px; }
+.lock { color: var(--muted); }

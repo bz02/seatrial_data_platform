@@ -13,16 +13,45 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import config, db, enterprise, market, sandbox
-from .pipeline import quality
+from . import auth, config, db, enterprise, experts, market, sandbox
+from .pipeline import agent, discovery, preferences, quality
 from .tasks import public_task
 
 STATIC = Path(__file__).resolve().parent / "static"
 RECORDER = Path(__file__).resolve().parent.parent / "recorder"
 
-app = FastAPI(title="SeaTrail", version="0.1.0")
+app = FastAPI(title="SeaTrail", version="0.2.0")
+
+
+@app.on_event("startup")
+def _check_settings():
+    if not config.DEMO_MODE and config.SECRET_KEY == "dev-only-change-me":
+        raise RuntimeError("Set SEATRAIL_SECRET_KEY before running with SEATRAIL_DEMO_MODE=false")
 # The recorder posts from the company's own web apps, so the capture API accepts cross-origin calls.
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+# Only the capture API is called cross-origin (from the company's apps), with a bearer token, no cookies.
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"],
+                   allow_credentials=False)
+
+MUTATING = {"POST", "PUT", "PATCH", "DELETE"}
+
+
+@app.middleware("http")
+async def security(request: Request, call_next):
+    # CSRF: browsers can't add custom headers cross-site without a CORS preflight, and our cookie
+    # is SameSite=Lax, so requiring this header on every state change blocks forged requests.
+    if (request.method in MUTATING and request.url.path.startswith("/api/")
+            and not request.url.path.startswith("/api/capture/")
+            and request.headers.get("x-requested-with") != "seatrail"):
+        return JSONResponse({"detail": "missing X-Requested-With header"}, status_code=403)
+    resp = await call_next(request)
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    resp.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    resp.headers["Permissions-Policy"] = "camera=(), geolocation=(), microphone=(self)"
+    if request.url.path != "/demo-erp":
+        resp.headers["X-Frame-Options"] = "DENY"
+    if config.COOKIE_SECURE:
+        resp.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    return resp
 
 
 @app.exception_handler(quality.SubmitError)
@@ -46,13 +75,20 @@ async def _not_found(_: Request, e: Exception):
 # ---------------------------------------------------------------------------
 # Auth helpers
 # ---------------------------------------------------------------------------
-def current_user(x_user_id: int | None = Header(default=None)) -> dict:
-    if x_user_id is None:
-        raise HTTPException(401, "sign in required")
-    u = db.q1("SELECT * FROM users WHERE id=?", x_user_id)
+def current_user(request: Request, x_user_id: int | None = Header(default=None)) -> dict:
+    u = auth.user_for_token(request.cookies.get(auth.COOKIE))
+    if u is None and config.DEMO_MODE and x_user_id is not None:
+        u = db.q1("SELECT * FROM users WHERE id=?", x_user_id)  # demo/test shortcut only
     if not u:
-        raise HTTPException(401, "unknown user")
+        raise HTTPException(401, "sign in required")
     return u
+
+
+def optional_user(request: Request, x_user_id: int | None = Header(default=None)) -> dict | None:
+    try:
+        return current_user(request, x_user_id)
+    except HTTPException:
+        return None
 
 
 def need(user: dict, *roles: str) -> None:
@@ -79,7 +115,13 @@ def _public_user(u: dict) -> dict:
     org = db.q1("SELECT name, kind FROM orgs WHERE id=?", u["org_id"])
     return {"id": u["id"], "name": u["name"], "role": u["role"], "email": u["email"], "org_id": u["org_id"],
             "org": org["name"], "org_kind": org["kind"], "credentials": u["credentials"],
-            "consented": bool(u["consent_at"])}
+            "consented": bool(u["consent_at"]), "tier": u["tier"]}
+
+
+@app.get("/healthz", include_in_schema=False)
+def healthz():
+    db.q1("SELECT 1 AS ok")
+    return {"ok": True}
 
 
 @app.get("/api/me")
@@ -87,8 +129,66 @@ def me(user=Depends(current_user)):
     return _public_user(user)
 
 
+# ---------------------------------------------------------------------------
+# Sign-in
+# ---------------------------------------------------------------------------
+def _with_session(resp_body: dict, user: dict) -> JSONResponse:
+    token = auth.create_session(user["id"])
+    resp = JSONResponse(resp_body)
+    resp.set_cookie(auth.COOKIE, token, max_age=config.SESSION_DAYS * 86400, httponly=True, samesite="lax",
+                    secure=config.COOKIE_SECURE, path="/")
+    return resp
+
+
+@app.get("/api/auth/config")
+def auth_config():
+    return {"demo_mode": config.DEMO_MODE}
+
+
+@app.post("/api/auth/signup")
+def signup(body: dict = Body(...)):
+    u = auth.signup(body.get("name", ""), body.get("email", ""), body.get("password", ""), body.get("role", ""),
+                    body.get("credentials", ""))
+    return _with_session(_public_user(u), u)
+
+
+@app.post("/api/auth/login")
+def login(request: Request, body: dict = Body(...)):
+    u = auth.authenticate(body.get("email", ""), body.get("password", ""),
+                          request.client.host if request.client else "?")
+    if not u:
+        raise HTTPException(401, "wrong email or password")
+    return _with_session(_public_user(u), u)
+
+
+@app.post("/api/auth/logout")
+def logout(request: Request):
+    auth.end_session(request.cookies.get(auth.COOKIE))
+    resp = JSONResponse({"ok": True})
+    resp.delete_cookie(auth.COOKIE, path="/")
+    return resp
+
+
+@app.post("/api/auth/password")
+def change_password(body: dict = Body(...), user=Depends(current_user)):
+    auth.change_password(user, body.get("old", ""), body.get("new", ""))
+    return {"ok": True}
+
+
+@app.post("/api/auth/demo-login")
+def demo_login(body: dict = Body(...)):
+    if not config.DEMO_MODE:
+        raise HTTPException(404, "not found")
+    u = db.q1("SELECT * FROM users WHERE id=?", int(body.get("user_id", 0)))
+    if not u:
+        raise HTTPException(404, "no such demo user")
+    return _with_session(_public_user(u), u)
+
+
 @app.get("/api/demo/users")
 def demo_users():
+    if not config.DEMO_MODE:
+        raise HTTPException(404, "not found")
     return [_public_user(u) for u in db.q("SELECT * FROM users ORDER BY org_id, id")]
 
 
@@ -99,11 +199,35 @@ def demo_users():
 def list_tasks(user=Depends(current_user)):
     need(user, "expert")
     out = []
-    for t in db.q("SELECT * FROM tasks WHERE active=1 ORDER BY id"):
-        mine = db.q1("SELECT id, status FROM sessions WHERE task_id=? AND user_id=? ORDER BY id DESC LIMIT 1",
-                     t["id"], user["id"])
-        out.append({**public_task(t), "my_session": mine})
+    for t in db.q("SELECT * FROM tasks WHERE active=1 AND (purpose='work' OR seed=?) ORDER BY purpose DESC, id",
+                  experts.QUAL_SEED_BASE + 1):
+        if t["purpose"] == "qualification":  # attempts run on per-attempt variants of this task
+            mine = db.q1("SELECT s.id, s.status FROM sessions s JOIN tasks q ON q.id=s.task_id WHERE s.user_id=?"
+                         " AND q.purpose='qualification' AND q.template=? ORDER BY s.id DESC LIMIT 1",
+                         user["id"], t["template"])
+            if mine and mine["status"] == "submitted":
+                mine = None  # a finished attempt: offer a retake if attempts remain
+        else:
+            mine = db.q1("SELECT id, status FROM sessions WHERE task_id=? AND user_id=? ORDER BY id DESC LIMIT 1",
+                         t["id"], user["id"])
+        ok, why = experts.can_start(user["id"], t)
+        base = db.q1("SELECT model, passed, score FROM baselines WHERE task_id=? ORDER BY id DESC LIMIT 1", t["id"])
+        out.append({**public_task(t), "my_session": mine, "locked": not ok and not mine, "locked_reason": why,
+                    "reward_cents": quality.task_reward(t["id"]) if t["purpose"] == "work" else 0,
+                    "model_baseline": base})
     return out
+
+
+@app.get("/api/me/expert")
+def my_expert_profile(user=Depends(current_user)):
+    need(user, "expert")
+    st = experts.stats(user["id"])
+    st["tier"] = experts.refresh_tier(user["id"])
+    st["qualifications"] = db.q("SELECT template, score, passed, created_at FROM qualifications WHERE user_id=?"
+                                " ORDER BY id DESC", user["id"])
+    st["senior_requirements"] = {"approved": experts.SENIOR_MIN_APPROVED, "mean_quality": experts.SENIOR_MIN_QUALITY,
+                                 "approval_rate": experts.SENIOR_MIN_APPROVAL_RATE}
+    return st
 
 
 @app.post("/api/tasks/{task_id}/start")
@@ -112,12 +236,21 @@ def start_task(task_id: int, user=Depends(current_user)):
     t = db.q1("SELECT * FROM tasks WHERE id=? AND active=1", task_id)
     if not t:
         raise HTTPException(404, "task not found")
+    if t["purpose"] == "qualification":
+        ok, why = experts.can_start(user["id"], t)
+        if not ok:
+            raise HTTPException(403, why)
+        t = db.q1("SELECT * FROM tasks WHERE id=?", experts.qualification_task_for(user["id"], t["template"]))
+        task_id = t["id"]
     existing = db.q1("SELECT id FROM sessions WHERE task_id=? AND user_id=? AND status IN ('in_progress','checked')",
                      task_id, user["id"])
     if existing:
         return {"session_id": existing["id"], "resumed": True}
     if db.q1("SELECT id FROM sessions WHERE task_id=? AND user_id=? AND status='submitted'", task_id, user["id"]):
         raise HTTPException(400, "you already submitted this task")
+    ok, why = experts.can_start(user["id"], t)
+    if not ok:
+        raise HTTPException(403, why)
     sid = db.x("INSERT INTO sessions (org_id, source, task_id, user_id, status, state, started_at)"
                " VALUES (?, 'sandbox', ?, ?, 'in_progress', ?, ?)", market.PLATFORM_ORG, task_id, user["id"],
                t["initial_state"], db.now())
@@ -173,7 +306,10 @@ def check_session(sid: int, user=Depends(current_user)):
 
 @app.post("/api/sessions/{sid}/submit")
 def submit_session(sid: int, user=Depends(current_user)):
-    _own_sandbox(sid, user)
+    s = _own_sandbox(sid, user)
+    t = db.q1("SELECT purpose FROM tasks WHERE id=?", s["task_id"])
+    if t["purpose"] == "qualification":
+        return {"qualification": experts.grade_qualification(sid)}
     return {"record_id": quality.submit(sid)}
 
 
@@ -213,8 +349,32 @@ def review_record(rid: int, user=Depends(current_user)):
         raise HTTPException(404, "record not found")
     for k in ("record", "verification", "judge", "pii", "flags"):
         r[k] = db.loads(r[k])
+    r["reviews"] = db.q("SELECT rr.approve, rr.notes, rr.created_at, u.name AS reviewer FROM record_reviews rr"
+                        " JOIN users u ON u.id=rr.reviewer_id WHERE rr.record_id=? ORDER BY rr.id", rid)
+    r["required_reviews"] = quality.required_reviews(r["quality_score"])
+    r["corrections"] = preferences.load_corrections(rid)
+    r["tools"] = sandbox.TOOLS if r["source"] == "sandbox" else None
     db.audit(user["org_id"], user["id"], "record.view", f"record:{rid}")
     return r
+
+
+@app.post("/api/review/records/{rid}/corrections")
+def review_correct(rid: int, body: dict = Body(...), user=Depends(current_user)):
+    _reviewer(user)
+    cid = quality.add_correction(rid, user, int(body.get("step_i", -1)), body.get("issue", ""),
+                                 body.get("corrected_thought", ""), body.get("corrected_action"),
+                                 body.get("note", ""))
+    return {"id": cid, "corrections": preferences.load_corrections(rid)}
+
+
+@app.get("/api/review/stats")
+def review_stats(user=Depends(current_user)):
+    _reviewer(user)
+    o = user["org_id"]
+    return {**quality.reviewer_agreement(o),
+            "corrections": db.q1("SELECT COUNT(*) n FROM step_corrections c JOIN records r ON r.id=c.record_id"
+                                 " WHERE r.org_id=?", o)["n"],
+            "double_review_below": config.DOUBLE_REVIEW_BELOW}
 
 
 @app.post("/api/review/records/{rid}")
@@ -235,11 +395,14 @@ def datasets():
 
 
 @app.get("/api/market/datasets/{did}")
-def dataset(did: int, x_user_id: int | None = Header(default=None)):
+def dataset(did: int, user=Depends(optional_user)):
     d = market.get_dataset(did)
+    bought = bool(user and db.q1("SELECT id FROM orders WHERE dataset_id=? AND buyer_id=?", did, user["id"]))
+    if d["status"] != "listed" and not bought and not (user and user["role"] == "admin"):
+        raise HTTPException(404, "dataset not found")
     d["sample"] = market.sample(did)
-    d["purchased"] = bool(x_user_id and db.q1("SELECT id FROM orders WHERE dataset_id=? AND buyer_id=?",
-                                              did, x_user_id))
+    d["purchased"] = bought
+    d["model_gap"] = [g for g in agent.gap_report() if g["template"] in d["stats"].get("templates", {})]
     return d
 
 
@@ -256,7 +419,8 @@ def purchases(user=Depends(current_user)):
                 " ORDER BY o.id DESC", user["id"])
 
 
-DOWNLOADABLE = {"sft_chat.jsonl", "trajectories.jsonl", "rl_environments.jsonl", "datacard.md", "manifest.json"}
+DOWNLOADABLE = {"sft_chat.jsonl", "trajectories.jsonl", "rl_environments.jsonl", "preferences.jsonl", "evals.jsonl",
+                "datacard.md", "manifest.json"}
 
 
 @app.get("/api/market/datasets/{did}/download/{name}")
@@ -287,6 +451,74 @@ def admin_datasets(user=Depends(current_user)):
 def admin_ledger(user=Depends(current_user)):
     need(user, "admin")
     return market.ledger()
+
+
+@app.post("/api/admin/baselines")
+def admin_run_baseline(body: dict = Body(...), user=Depends(current_user)):
+    need(user, "admin")
+    return agent.run_baseline(int(body["task_id"]))
+
+
+@app.get("/api/admin/baselines")
+def admin_baselines(user=Depends(current_user)):
+    need(user, "admin")
+    rows = db.q("SELECT b.id, b.task_id, b.model, b.score, b.passed, b.steps, b.created_at, t.template, t.title"
+                " FROM baselines b JOIN tasks t ON t.id=b.task_id ORDER BY b.id DESC LIMIT 200")
+    return {"runs": rows, "gap": agent.gap_report()}
+
+
+@app.get("/api/market/gap")
+def market_gap():
+    return agent.gap_report()
+
+
+@app.post("/api/market/requests")
+def buyer_request(body: dict = Body(...), user=Depends(current_user)):
+    need(user, "buyer")
+    return market.create_request(user, body.get("template", ""), int(body.get("quantity", 0)),
+                                 float(body.get("min_quality", 0.8)), int(body.get("budget_cents", 0)),
+                                 body.get("notes", ""))
+
+
+@app.get("/api/market/requests")
+def buyer_requests(user=Depends(current_user)):
+    need(user, "buyer", "admin")
+    return market.list_requests(None if user["role"] == "admin" else user["id"])
+
+
+@app.post("/api/admin/requests/{rid}/{action}")
+def admin_request_action(rid: int, action: str, user=Depends(current_user)):
+    need(user, "admin")
+    if action == "produce":
+        return market.produce_request(user["id"], rid)
+    if action == "deliver":
+        return market.deliver_request(user["id"], rid)
+    if action == "decline":
+        db.x("UPDATE data_requests SET status='declined' WHERE id=? AND status='open'", rid)
+        return market.get_request(rid)
+    raise HTTPException(404, "unknown action")
+
+
+@app.post("/api/leads")
+def create_lead(request: Request, body: dict = Body(...)):
+    kind = body.get("kind")
+    email = (body.get("email") or "").strip()
+    if kind not in ("enterprise", "expert", "buyer") or "@" not in email or len(email) > 200:
+        raise HTTPException(400, "pick a type and enter a valid email")
+    ip = request.client.host if request.client else "?"
+    if auth.throttled(f"lead:{ip}"):
+        raise HTTPException(429, "too many requests, try again later")
+    auth.record_failure(f"lead:{ip}")  # counts submissions per IP, not failures
+    db.x("INSERT INTO leads (kind, name, email, company, message, created_at) VALUES (?,?,?,?,?,?)", kind,
+         (body.get("name") or "")[:120], email, (body.get("company") or "")[:120], (body.get("message") or "")[:2000],
+         db.now())
+    return {"ok": True}
+
+
+@app.get("/api/admin/leads")
+def admin_leads(user=Depends(current_user)):
+    need(user, "admin")
+    return db.q("SELECT * FROM leads ORDER BY id DESC LIMIT 500")
 
 
 @app.post("/api/market/seller/listings")
@@ -492,6 +724,32 @@ def ent_stats(user=Depends(current_user)):
             "records": by_status, "approved_by_workflow": by_wf}
 
 
+@app.get("/api/ent/discovery")
+def ent_discovery(user=Depends(current_user)):
+    _ent(user, "steward", "ml_engineer", "org_admin")
+    return discovery.summarize(user["org_id"])
+
+
+@app.get("/api/ent/discovery/{workflow}")
+def ent_discovery_map(workflow: str, user=Depends(current_user)):
+    _ent(user, "steward", "ml_engineer", "org_admin")
+    return discovery.workflow_map(user["org_id"], workflow)
+
+
+@app.get("/api/ent/users")
+def ent_users(user=Depends(current_user)):
+    _ent(user, "org_admin")
+    return [{**_public_user(u), "created_at": u["created_at"]}
+            for u in db.q("SELECT * FROM users WHERE org_id=? ORDER BY id", user["org_id"])]
+
+
+@app.post("/api/ent/users")
+def ent_invite(body: dict = Body(...), user=Depends(current_user)):
+    _ent(user, "org_admin")
+    u, temp = auth.invite(user, body.get("name", ""), body.get("email", ""), body.get("role", "employee"))
+    return {"user": _public_user(u), "temporary_password": temp}
+
+
 # ---------------------------------------------------------------------------
 # Capture API, called by the browser recorder with a capture token
 # ---------------------------------------------------------------------------
@@ -522,7 +780,7 @@ def cap_stop(sid: int, user=Depends(capture_user)):
 # ---------------------------------------------------------------------------
 # Web apps
 # ---------------------------------------------------------------------------
-PAGES = {"": "index.html", "expert": "expert.html", "review": "review.html", "market": "market.html",
+PAGES = {"": "landing.html", "app": "app.html", "login": "login.html", "expert": "expert.html", "review": "review.html", "market": "market.html",
          "enterprise": "enterprise.html", "demo-erp": "demo-erp.html"}
 
 

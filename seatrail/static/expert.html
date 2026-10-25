@@ -19,6 +19,7 @@
   <div id="list-view">
     <div class="row"><h1>Tasks</h1><div class="spacer"></div><div id="earn" class="small"></div></div>
     <p class="muted">Each task runs on synthetic company data. Work as you normally would and say your reasoning out loud. Your work is checked automatically and you can see the quality score before you submit.</p>
+    <div class="panel" id="profile" style="margin-bottom:16px"></div>
     <div class="panel tight"><div class="table-wrap"><table id="tasks"></table></div></div>
     <h2 style="margin-top:20px">My submissions</h2>
     <div class="panel tight"><table id="mine"></table></div>
@@ -64,12 +65,35 @@ const $ = (id) => document.getElementById(id);
 
 async function loadList() {
   $("list-view").classList.remove("hidden"); $("ws-view").classList.add("hidden");
-  const tasks = await ST.api("/api/tasks");
-  $("tasks").innerHTML = `<tr><th>Task</th><th>Template</th><th>Level</th><th>Reward</th><th></th></tr>` +
-    tasks.map((t) => `<tr><td>${ST.esc(t.title)}<div class="small muted">#${t.id}</div></td><td>${ST.label(t.template)}</td>
-      <td>${t.difficulty}</td><td class="num">${ST.money(t.reward_cents)}</td>
-      <td>${t.my_session && t.my_session.status === "submitted" ? ST.statusTag("submitted")
-        : `<button class="primary" data-start="${t.id}">${t.my_session ? "Resume" : "Start"}</button>`}</td></tr>`).join("");
+  const [tasks, prof] = await Promise.all([ST.api("/api/tasks"), ST.api("/api/me/expert")]);
+  const req = prof.senior_requirements;
+  const tierTag = { applicant: "warn", qualified: "ok", senior: "ok" }[prof.tier] || "gray";
+  $("profile").innerHTML = `<div class="row" style="flex-wrap:wrap;gap:16px">
+      <div><div class="small muted">Your tier</div><span class="tag ${tierTag}" style="font-size:14px">${ST.label(prof.tier)}</span></div>
+      <div><div class="small muted">Qualified in</div>${prof.qualified_templates.map((t) => `<span class="tag">${ST.label(t)}</span>`).join(" ") || '<span class="muted">nothing yet</span>'}</div>
+      <div><div class="small muted">Approved</div><b>${prof.approved}</b></div>
+      <div><div class="small muted">Approval rate</div><b>${prof.approval_rate == null ? "–" : ST.pct(prof.approval_rate)}</b></div>
+      <div><div class="small muted">Mean quality</div><b>${prof.mean_quality == null ? "–" : ST.pct(prof.mean_quality)}</b></div>
+    </div>
+    <p class="small muted" style="margin:8px 0 0">${prof.tier === "applicant"
+      ? "Pass the qualification task for a specialty to unlock its paid tasks. You get 3 attempts, each on a different case."
+      : prof.tier === "qualified" ? `Senior experts get first pick of new tasks. Senior needs ${req.approved} approved records, ${ST.pct(req.mean_quality)} mean quality and ${ST.pct(req.approval_rate)} approval rate.`
+      : "Senior expert: you get first pick of new and custom tasks."}</p>`;
+  const row = (t) => {
+    const done = t.my_session && t.my_session.status === "submitted";
+    const base = t.model_baseline;
+    const badge = base && !base.passed ? ` <span class="tag warn" title="Frontier model scored ${ST.pct(base.score)} on this task">model failed · bonus</span>` : "";
+    const action = done ? ST.statusTag("submitted")
+      : t.locked ? `<span class="small lock" title="${ST.esc(t.locked_reason)}">🔒 ${ST.esc(t.locked_reason)}</span>`
+      : `<button class="primary" data-start="${t.id}">${t.my_session ? "Resume" : t.purpose === "qualification" ? "Take test" : "Start"}</button>`;
+    return `<tr><td>${ST.esc(t.title)}${badge}<div class="small muted">#${t.id}${t.purpose === "qualification" ? " · qualification, unpaid" : ""}</div></td>
+      <td>${ST.label(t.template)}</td><td>${t.difficulty}</td><td class="num">${t.purpose === "qualification" ? "–" : ST.money(t.reward_cents)}</td><td>${action}</td></tr>`;
+  };
+  const quals = tasks.filter((t) => t.purpose === "qualification" && !prof.qualified_templates.includes(t.template));
+  const work = tasks.filter((t) => t.purpose === "work");
+  $("tasks").innerHTML = `<tr><th>Task</th><th>Specialty</th><th>Level</th><th>Reward</th><th></th></tr>` +
+    (quals.length ? `<tr><td colspan="5" class="small"><b>Qualification</b></td></tr>` + quals.map(row).join("") : "") +
+    `<tr><td colspan="5" class="small"><b>Paid tasks</b></td></tr>` + work.map(row).join("");
   document.querySelectorAll("[data-start]").forEach((b) => b.onclick = () => start(b.dataset.start));
   const e = await ST.api("/api/me/earnings");
   $("earn").innerHTML = `Earned <b>${ST.money(e.total_cents)}</b> <span class="muted">(${ST.money(e.task_rewards_cents)} task rewards · ${ST.money(e.revenue_share_cents)} dataset revenue share)</span>`;
@@ -189,13 +213,18 @@ $("check").onclick = async () => {
   catch (e) { $("report").innerHTML = `<div class="notice bad">${ST.esc(e.message)}</div>`; }
 };
 function showReport(r) {
-  $("report").innerHTML = ST.reportHTML(r);
-  $("submit").classList.toggle("hidden", !r.can_submit || S.status === "submitted");
+  const qual = S.task.purpose === "qualification";
+  $("report").innerHTML = (qual ? `<div class="notice" style="margin-bottom:8px">Qualification test: you pass if the automatic check passes and you explained your decisions. The answers are never shown, so you can't retry the same case.</div>` : "") + ST.reportHTML(r);
+  $("submit").textContent = qual ? "Submit test" : "Submit for review";
+  $("submit").classList.toggle("hidden", S.status === "submitted" || (qual ? !S.state.submitted : !r.can_submit));
 }
 $("submit").onclick = async () => {
   try {
     const r = await ST.api(`/api/sessions/${S.id}/submit`, { method: "POST" });
-    ST.toast(`Submitted as record #${r.record_id}. A reviewer will look at it.`);
+    if (r.qualification) {
+      const q = r.qualification;
+      ST.toast(q.passed ? `Passed! ${ST.label(q.template)} tasks are unlocked.` : `Not passed this time (${ST.pct(q.score)}). You can retake it on a new case.`);
+    } else ST.toast(`Submitted as record #${r.record_id}. A reviewer will look at it.`);
     location.hash = ""; loadList();
   } catch (e) { ST.toast(e.message); }
 };
