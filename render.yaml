@@ -5,8 +5,7 @@ services:
     runtime: docker
     plan: starter
     domains:
-      - seatrial.ai
-      - www.seatrial.ai
+      - data.seatrial.ai
     healthCheckPath: /healthz
     disk:
       name: seatrial-data
@@ -20,6 +19,6 @@ services:
       - key: SEATRAIL_SECRET_KEY
         generateValue: true
       - key: SEATRAIL_PUBLIC_URL
-        value: https://seatrial.ai
+        value: https://data.seatrial.ai
       - key: ANTHROPIC_API_KEY
         sync: false
