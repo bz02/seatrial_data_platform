@@ -1,4 +1,4 @@
-# SeaTrail
+# SeaTrial
 
 Turn how experts actually work into post-training data for AI agents: every step they take, the
 reasoning behind it, and a quality check before it counts. First vertical: accounting.
@@ -10,7 +10,7 @@ Two products share one core:
 | Who records | A company's own employees, on their real work | Paid, qualified outside experts, on sandbox tasks |
 | Where | Company's internal web apps, via a browser recorder | Spreadsheet + mail sandbox with synthetic company data |
 | Ground truth | Outcome label + steward review (two reviewers when quality is low) | Hidden answer key, verified automatically |
-| Data owner | The company. Deployed in its network | SeaTrail; sold as datasets or custom orders |
+| Data owner | The company. Deployed in its network | SeaTrial; sold as datasets or custom orders |
 | Extras | Process discovery: workflow maps, variants, coverage, what to record next | Frontier-model baseline per task, model-vs-expert gap, expert tiers |
 
 Shared core: event-sourced recording → `seatrail.trajectory.v1` records → PII redaction,

@@ -1,4 +1,4 @@
-// Shared helpers for every SeaTrail page.
+// Shared helpers for every SeaTrial page.
 const ST = {
   me: null,
 
@@ -54,7 +54,7 @@ const ST = {
     bar.className = "topbar";
     const allowed = demoUsers.filter((u) => !roles || roles.includes(u.role));
     bar.innerHTML = `
-      <a class="logo" href="/">SeaTrail</a>
+      <a class="logo" href="/">SeaTrial</a>
       <nav>${links.map(([h, t]) => `<a href="${h}" class="${h === active ? "on" : ""}">${t}</a>`).join("")}</nav>
       <div class="user">
         ${cfg.demo_mode && allowed.length ? `<span class="small">Demo</span>

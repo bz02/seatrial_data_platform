@@ -22,9 +22,9 @@
 </style>
 </head><body>
 <header><b>Halcyon ERP</b><a href="#invoices" data-r="invoices">AP inbox</a><a href="#new" data-r="new">New invoice</a><a href="#pos" data-r="pos">Purchase orders</a>
-  <span style="margin-left:auto;font-size:12px;color:#c5d0ea">Demo internal app · <a href="/enterprise">back to SeaTrail</a></span></header>
+  <span style="margin-left:auto;font-size:12px;color:#c5d0ea">Demo internal app · <a href="/enterprise">back to SeaTrial</a></span></header>
 <main>
-  <div id="banner" class="banner hide">To record here, open SeaTrail &gt; Enterprise as an employee and opt in under "Consent &amp; recorder". The recorder appears in the bottom-right corner.</div>
+  <div id="banner" class="banner hide">To record here, open SeaTrial &gt; Enterprise as an employee and opt in under "Consent &amp; recorder". The recorder appears in the bottom-right corner.</div>
 
   <section id="r-invoices" class="card">
     <h2 style="margin-top:0">AP inbox</h2>
@@ -71,7 +71,7 @@ function route() {
 window.addEventListener("hashchange", route); route();
 let token = null;
 try { token = new URLSearchParams(location.search).get("token") || localStorage.getItem("seatrail_demo_token"); } catch (e) {}
-if (token) SeaTrailRecorder.init({ apiBase: location.origin, token }).then((r) => { if (!r.enabled) document.getElementById("banner").classList.remove("hide"); });
+if (token) SeaTrialRecorder.init({ apiBase: location.origin, token }).then((r) => { if (!r.enabled) document.getElementById("banner").classList.remove("hide"); });
 else document.getElementById("banner").classList.remove("hide");
 </script>
 </body></html>

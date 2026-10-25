@@ -2,7 +2,7 @@
 #   fly volumes create seatrail_data --size 1
 #   fly secrets set SEATRAIL_SECRET_KEY=... ANTHROPIC_API_KEY=...
 #   fly deploy
-app = "seatrail"
+app = "seatrial"
 primary_region = "sjc"
 
 [build]

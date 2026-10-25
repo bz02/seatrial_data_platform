@@ -20,7 +20,7 @@ from .tasks import public_task
 STATIC = Path(__file__).resolve().parent / "static"
 RECORDER = Path(__file__).resolve().parent.parent / "recorder"
 
-app = FastAPI(title="SeaTrail", version="0.2.0")
+app = FastAPI(title="SeaTrial", version="0.2.0")
 
 
 @app.on_event("startup")

@@ -18,7 +18,7 @@ from seatrail import auth, db, enterprise, experts, tasks  # noqa: E402
 
 
 def init() -> None:
-    db.x("INSERT OR IGNORE INTO orgs (id, name, kind, policy, created_at) VALUES (0, 'SeaTrail Marketplace',"
+    db.x("INSERT OR IGNORE INTO orgs (id, name, kind, policy, created_at) VALUES (0, 'SeaTrial Marketplace',"
          " 'platform', '{}', ?)", db.now())
     for template in tasks.TEMPLATES:
         for seed in range(1, 5):

@@ -29,7 +29,7 @@ USERS = [
 def seed_base() -> dict:
     now = db.now()
     with db.tx() as c:
-        c.execute("INSERT OR IGNORE INTO orgs (id, name, kind, policy, created_at) VALUES (0, 'SeaTrail Marketplace',"
+        c.execute("INSERT OR IGNORE INTO orgs (id, name, kind, policy, created_at) VALUES (0, 'SeaTrial Marketplace',"
                   " 'platform', '{}', ?)", (now,))
         policy = {**enterprise.DEFAULT_POLICY, "sensitive_terms": ["Halcyon", "Meridian Health", "Project Atlas"]}
         c.execute("INSERT OR IGNORE INTO orgs (id, name, kind, policy, created_at) VALUES (1, 'Halcyon Accounting Group',"

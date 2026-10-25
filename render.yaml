@@ -1,12 +1,15 @@
 # Render blueprint: New > Blueprint, point at this repo. Uses a persistent disk for SQLite.
 services:
   - type: web
-    name: seatrail
+    name: seatrial
     runtime: docker
     plan: starter
+    domains:
+      - seatrial.ai
+      - www.seatrial.ai
     healthCheckPath: /healthz
     disk:
-      name: seatrail-data
+      name: seatrial-data
       mountPath: /data
       sizeGB: 1
     envVars:
@@ -17,6 +20,6 @@ services:
       - key: SEATRAIL_SECRET_KEY
         generateValue: true
       - key: SEATRAIL_PUBLIC_URL
-        sync: false
+        value: https://seatrial.ai
       - key: ANTHROPIC_API_KEY
         sync: false

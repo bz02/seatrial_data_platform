@@ -39,7 +39,7 @@ const VIEWS = {
     const t = await ST.api("/api/ent/my/token");
     const p = await ST.api("/api/ent/policy");
     v.innerHTML = `<div class="grid cols-2"><div class="panel"><h2>Recording consent</h2>
-      <p>If you opt in, the SeaTrail recorder can capture your clicks, form entries and spoken reasoning <b>only</b> on these company apps:</p>
+      <p>If you opt in, the SeaTrial recorder can capture your clicks, form entries and spoken reasoning <b>only</b> on these company apps:</p>
       <p>${p.allowed_hosts.map((h) => `<span class="tag gray mono">${ST.esc(h)}</span>`).join(" ")}</p>
       <ul class="tight small"><li>Nothing is recorded until you press Start, and you can pause or stop anytime.</li>
         <li>Password, bank and other sensitive fields are masked before they leave your browser.</li>
@@ -122,7 +122,7 @@ const VIEWS = {
       <label class="f">Delete raw recordings after (days)<input id="ret" type="number" value="${p.retention_days}"></label>
       <div class="row"><button class="primary" id="save">Save policy</button><button id="purge">Run retention purge now</button></div></div></div>
       <div class="panel"><h2>Where data goes</h2><ul class="tight small">
-        <li>Recorder → this SeaTrail server, inside your network. Hosts outside the allowlist are ignored in the browser and again on the server.</li>
+        <li>Recorder → this SeaTrial server, inside your network. Hosts outside the allowlist are ignored in the browser and again on the server.</li>
         <li>Masked fields are replaced in the browser; the value is never sent.</li>
         <li>Rule-based redaction (emails, phones, SSNs, card and account numbers, your sensitive terms) runs on the server before anyone reviews a record.</li>
         <li>Model grading is ${p.judge === "off" ? "<b>off</b>, so no record leaves the server" : "on, records are sent to " + ST.esc(p.judge_base_url || "the Anthropic API")}.</li>

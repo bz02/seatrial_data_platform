@@ -79,7 +79,7 @@ def get_dataset(did: int) -> dict:
     if not d:
         raise KeyError("dataset not found")
     d["stats"] = _stats(did)
-    d["seller"] = "SeaTrail (platform)" if d["seller_id"] == config.PLATFORM_SELLER_ID else \
+    d["seller"] = "SeaTrial (platform)" if d["seller_id"] == config.PLATFORM_SELLER_ID else \
         (db.q1("SELECT name FROM users WHERE id=?", d["seller_id"]) or {}).get("name")
     return d
 

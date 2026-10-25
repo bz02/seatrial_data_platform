@@ -115,13 +115,13 @@ async function render() {
       <div class="kpi"><div class="v">${ST.money(l.seller_net_cents)}</div><div class="l">third-party seller payouts</div></div></div>
       <div class="panel" style="margin-top:16px"><h2>Fee model</h2>
       <p><b>Now (platform sells):</b> experts get a fixed task reward when their record is approved, plus ${ST.pct(l.expert_revenue_share)} of every sale of a dataset that includes their work, split by records contributed.</p>
-      <p><b>Later (open marketplace):</b> third-party sellers list datasets and SeaTrail keeps a ${ST.pct(l.take_rate_open_market)} take rate on each sale. Currently <b>${l.open_marketplace ? "on" : "off"}</b> (env <span class="mono">SEATRAIL_OPEN_MARKETPLACE</span>).</p></div>`;
+      <p><b>Later (open marketplace):</b> third-party sellers list datasets and SeaTrial keeps a ${ST.pct(l.take_rate_open_market)} take rate on each sale. Currently <b>${l.open_marketplace ? "on" : "off"}</b> (env <span class="mono">SEATRAIL_OPEN_MARKETPLACE</span>).</p></div>`;
   } else if (tab === "sell") {
     const cfg = await ST.api("/api/market/config");
     v.innerHTML = cfg.open_marketplace
-      ? `<div class="panel"><h2>List a dataset</h2><p class="muted">Upload JSONL in seatrail.trajectory.v1. SeaTrail keeps ${ST.pct(cfg.take_rate)} of each sale.</p>
+      ? `<div class="panel"><h2>List a dataset</h2><p class="muted">Upload JSONL in seatrail.trajectory.v1. SeaTrial keeps ${ST.pct(cfg.take_rate)} of each sale.</p>
          <div class="grid"><input id="n" placeholder="Name"><input id="price" type="number" placeholder="Price USD"><textarea id="jsonl" rows="6" placeholder="Paste JSONL"></textarea><div><button class="primary" id="go">Submit listing</button></div></div></div>`
-      : `<div class="notice">The open marketplace isn't live yet. Today SeaTrail is the only seller; third-party listings (with a ${ST.pct(cfg.take_rate)} take rate) are built and will be switched on later.</div>`;
+      : `<div class="notice">The open marketplace isn't live yet. Today SeaTrial is the only seller; third-party listings (with a ${ST.pct(cfg.take_rate)} take rate) are built and will be switched on later.</div>`;
     if ($("go")) $("go").onclick = async () => {
       try { await ST.api("/api/market/seller/listings", { method: "POST", body: { name: $("n").value, price_cents: Math.round(+$("price").value * 100), jsonl: $("jsonl").value } }); ST.toast("Listing submitted for review"); }
       catch (e) { ST.toast(e.message); }
@@ -170,7 +170,7 @@ async function detail(id) {
 (async () => {
   me = await ST.topbar("/market", ["buyer", "admin", "seller", "expert"]);
   const cfg = await ST.api("/api/market/config");
-  $("mode").textContent = cfg.open_marketplace ? "Open marketplace" : "Curated by SeaTrail";
+  $("mode").textContent = cfg.open_marketplace ? "Open marketplace" : "Curated by SeaTrial";
   render();
 })();
 </script>

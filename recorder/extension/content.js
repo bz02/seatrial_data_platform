@@ -5,5 +5,5 @@ const chromeStore = {
   set: (k, v) => new Promise((r) => chrome.storage.local.set({ ["st_" + k]: v }, r)),
 };
 chrome.storage.local.get(["apiBase", "token"], ({ apiBase, token }) => {
-  if (apiBase && token) window.SeaTrailRecorder.init({ apiBase, token, storage: chromeStore });
+  if (apiBase && token) window.SeaTrialRecorder.init({ apiBase, token, storage: chromeStore });
 });

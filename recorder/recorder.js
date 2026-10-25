@@ -1,8 +1,8 @@
 /*
- * SeaTrail workflow recorder.
+ * SeaTrial workflow recorder.
  *
  * Records what an employee does in their company's web apps (navigation, clicks, form inputs) plus
- * their spoken or typed reasoning, and sends it to the company's own SeaTrail server.
+ * their spoken or typed reasoning, and sends it to the company's own SeaTrial server.
  *
  * Privacy rules enforced here, and again on the server:
  *  - Only runs on hosts in the org's allowlist.
@@ -10,10 +10,10 @@
  *  - Nothing is recorded until the employee presses Start, and Pause/Stop are always one click away.
  *
  * Used two ways: as the content script of the browser extension, or embedded with a <script> tag in
- * an internal app. Call SeaTrailRecorder.init({apiBase, token, storage?}).
+ * an internal app. Call SeaTrialRecorder.init({apiBase, token, storage?}).
  */
 (function () {
-  if (window.SeaTrailRecorder) return;
+  if (window.SeaTrialRecorder) return;
 
   const localStore = {
     get: async (k) => { try { return JSON.parse(localStorage.getItem("seatrail:" + k)); } catch (e) { return null; } },
@@ -192,7 +192,7 @@
     R.state = null;
     await R.store.set("state", null);
     render();
-    status(`Saved episode #${sid}. Review it in SeaTrail before submitting.`);
+    status(`Saved episode #${sid}. Review it in SeaTrial before submitting.`);
   }
   function note(text) { if (text.trim()) push("think", { text: text.trim(), via: "typed" }); }
 
@@ -224,7 +224,7 @@
         .min { margin-left:auto; background:none; border:none; color:#fff; flex:0; cursor:pointer; font-size:16px; padding:0 4px; }
       </style>
       <div class="p">
-        <div class="h"><span class="dot"></span><span class="title">SeaTrail recorder</span><button class="min" title="Minimize">–</button></div>
+        <div class="h"><span class="dot"></span><span class="title">SeaTrial recorder</span><button class="min" title="Minimize">–</button></div>
         <div class="b body"></div>
       </div>`;
     document.documentElement.appendChild(host);
@@ -280,7 +280,7 @@
     try {
       R.policy = await api("/api/capture/config");
     } catch (e) {
-      console.warn("SeaTrail recorder disabled:", e.message);
+      console.warn("SeaTrial recorder disabled:", e.message);
       return { enabled: false, reason: e.message };
     }
     if (!hostAllowed(R.policy.allowed_hosts)) return { enabled: false, reason: "host not in allowlist" };
@@ -292,5 +292,5 @@
     return { enabled: true };
   }
 
-  window.SeaTrailRecorder = { init, start, stop, pause, note, flush, _r: R };
+  window.SeaTrialRecorder = { init, start, stop, pause, note, flush, _r: R };
 })();
