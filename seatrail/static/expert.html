@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Expert Workspace</title>
+<link rel="stylesheet" href="/static/app.css">
+<style>
+  .ws { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 16px; align-items: start; }
+  @media (max-width: 980px) { .ws { grid-template-columns: 1fr; } }
+  .side { position: sticky; top: 12px; display: grid; gap: 12px; }
+  .mail { border: 1px solid var(--line); border-radius: 8px; padding: 10px; margin-bottom: 8px; }
+  .mail pre { white-space: pre-wrap; font: inherit; margin: 6px 0 0; }
+  .fields td input { width: 160px; text-align: right; }
+  .feed { max-height: 220px; overflow: auto; font-size: 12px; }
+  .feed div { padding: 3px 0; border-bottom: 1px dashed var(--line); }
+  .rec { display:inline-block; width:8px; height:8px; border-radius:50%; background:#e5484d; margin-right:6px; }
+</style>
+</head><body>
+<main>
+  <div id="list-view">
+    <div class="row"><h1>Tasks</h1><div class="spacer"></div><div id="earn" class="small"></div></div>
+    <p class="muted">Each task runs on synthetic company data. Work as you normally would and say your reasoning out loud. Your work is checked automatically and you can see the quality score before you submit.</p>
+    <div class="panel tight"><div class="table-wrap"><table id="tasks"></table></div></div>
+    <h2 style="margin-top:20px">My submissions</h2>
+    <div class="panel tight"><table id="mine"></table></div>
+  </div>
+
+  <div id="ws-view" class="hidden">
+    <div class="row" style="margin-bottom:10px">
+      <button id="back">← Tasks</button>
+      <h1 id="ws-title" style="margin:0 8px"></h1>
+      <span id="ws-status"></span><div class="spacer"></div>
+      <span class="small muted"><span class="rec"></span>Recording every action</span>
+    </div>
+    <div class="ws">
+      <section class="panel">
+        <div class="tabs" id="apps"></div>
+        <div id="app"></div>
+      </section>
+      <aside class="side">
+        <div class="panel">
+          <h2>Think aloud</h2>
+          <p class="small muted">Say why before each decision, especially the exceptions. Enter adds a note.</p>
+          <textarea id="note" rows="3" placeholder="e.g. B004 is $9 off from L012, looks like transposed digits..."></textarea>
+          <div class="row" style="margin-top:6px"><button id="mic">🎙 Voice</button><button id="add-note" class="primary">Add note</button></div>
+          <div class="feed" id="feed" style="margin-top:8px"></div>
+        </div>
+        <div class="panel">
+          <div class="row"><button id="finish">Finish task</button><button id="check" class="primary">Check quality</button></div>
+          <div id="report" style="margin-top:12px"></div>
+          <button id="submit" class="primary hidden" style="margin-top:10px;width:100%">Submit for review</button>
+        </div>
+      </aside>
+    </div>
+  </div>
+</main>
+<script src="/static/common.js"></script>
+<script>
+let S = null;          // current session payload
+let t0 = Date.now();   // client clock for event timestamps
+let currentApp = "brief";
+let speech = null;
+
+const $ = (id) => document.getElementById(id);
+
+async function loadList() {
+  $("list-view").classList.remove("hidden"); $("ws-view").classList.add("hidden");
+  const tasks = await ST.api("/api/tasks");
+  $("tasks").innerHTML = `<tr><th>Task</th><th>Template</th><th>Level</th><th>Reward</th><th></th></tr>` +
+    tasks.map((t) => `<tr><td>${ST.esc(t.title)}<div class="small muted">#${t.id}</div></td><td>${ST.label(t.template)}</td>
+      <td>${t.difficulty}</td><td class="num">${ST.money(t.reward_cents)}</td>
+      <td>${t.my_session && t.my_session.status === "submitted" ? ST.statusTag("submitted")
+        : `<button class="primary" data-start="${t.id}">${t.my_session ? "Resume" : "Start"}</button>`}</td></tr>`).join("");
+  document.querySelectorAll("[data-start]").forEach((b) => b.onclick = () => start(b.dataset.start));
+  const e = await ST.api("/api/me/earnings");
+  $("earn").innerHTML = `Earned <b>${ST.money(e.total_cents)}</b> <span class="muted">(${ST.money(e.task_rewards_cents)} task rewards · ${ST.money(e.revenue_share_cents)} dataset revenue share)</span>`;
+  $("mine").innerHTML = `<tr><th>Record</th><th>Task</th><th>Quality</th><th>Status</th></tr>` +
+    (e.records.map((r) => `<tr><td>#${r.id}</td><td>${ST.label(r.template)}</td><td class="num">${ST.pct(r.quality_score)}</td><td>${ST.statusTag(r.status)}</td></tr>`).join("")
+      || `<tr><td colspan="4" class="muted">Nothing submitted yet.</td></tr>`);
+}
+
+async function start(taskId) {
+  const r = await ST.api(`/api/tasks/${taskId}/start`, { method: "POST" });
+  await openSession(r.session_id);
+}
+
+async function openSession(id) {
+  S = await ST.api(`/api/sessions/${id}`);
+  const last = S.events.length ? S.events[S.events.length - 1].ts : 0;
+  t0 = Date.now() - last * 1000;
+  $("list-view").classList.add("hidden"); $("ws-view").classList.remove("hidden");
+  $("ws-title").textContent = S.task.title;
+  renderStatus(); renderApps(); renderFeed();
+  if (S.report) showReport(S.report);
+  history.replaceState(null, "", "#session=" + id);
+}
+
+function renderStatus() {
+  $("ws-status").innerHTML = S.state.submitted ? '<span class="tag ok">finished</span>' : '<span class="tag gray">in progress</span>';
+  $("finish").disabled = !!S.state.submitted;
+}
+
+async function send(type, payload) {
+  const ts = Math.round((Date.now() - t0) / 100) / 10;
+  const r = await ST.api(`/api/sessions/${S.id}/events`, { method: "POST", body: { events: [{ type, payload, ts }] } });
+  if (r.errors.length) { ST.toast(r.errors[0].error); return false; }
+  S.state = r.state; S.events.push({ type, payload, ts });
+  renderFeed(); renderStatus();
+  $("submit").classList.add("hidden");
+  return true;
+}
+
+function renderApps() {
+  const apps = [["brief", "Brief"], ["inbox", "Mail"], ...S.state.sheets.map((s) => ["sheet:" + s.name, s.name]), ["fields", "Answers"]];
+  $("apps").innerHTML = apps.map(([k, l]) => `<button data-app="${ST.esc(k)}" class="${k === currentApp ? "on" : ""}">${ST.esc(l)}</button>`).join("");
+  $("apps").querySelectorAll("button").forEach((b) => b.onclick = () => openApp(b.dataset.app));
+  drawApp();
+}
+
+async function openApp(k) {
+  currentApp = k;
+  await send("view", { target: k });
+  renderApps();
+}
+
+function drawApp() {
+  const st = S.state, el = $("app");
+  if (currentApp === "brief") {
+    el.innerHTML = `<p>${ST.esc(S.task.brief)}</p><p class="small muted">Reward ${ST.money(S.task.reward_cents)} · ${S.task.difficulty}</p>`;
+  } else if (currentApp === "inbox") {
+    el.innerHTML = st.inbox.map((m) => `<div class="mail"><b>${ST.esc(m.subject)}</b> <span class="small muted">from ${ST.esc(m.from)} · ${m.date}</span><pre>${ST.esc(m.body)}</pre></div>`).join("") +
+      `<h3>Sent</h3>${st.outbox.map((m) => `<div class="mail small">To ${ST.esc(m.to)}: <b>${ST.esc(m.subject)}</b><pre>${ST.esc(m.body)}</pre></div>`).join("") || '<p class="small muted">Nothing sent.</p>'}
+      <h3>Compose</h3>
+      <div class="grid"><input id="to" placeholder="To"><input id="subj" placeholder="Subject"><textarea id="body" rows="4" placeholder="Message"></textarea>
+      <div><button class="primary" id="send">Send</button></div></div>`;
+    $("send").onclick = async () => {
+      if (await send("send_email", { to: $("to").value, subject: $("subj").value, body: $("body").value })) drawApp();
+    };
+  } else if (currentApp.startsWith("sheet:")) {
+    const sh = st.sheets.find((s) => s.name === currentApp.slice(6));
+    el.innerHTML = `<div class="table-wrap"><table><tr>${sh.columns.map((c) => `<th>${ST.esc(c.label)}</th>`).join("")}</tr>
+      ${sh.rows.map((r) => `<tr>${sh.columns.map((c) => {
+        const v = r[c.key];
+        if (!c.editable) return `<td class="${c.type === "money" ? "num" : c.type === "date" ? "date" : ""}">${ST.esc(c.type === "money" ? ST.num(v) : v)}</td>`;
+        const ctl = c.options
+          ? `<select data-row="${r.id}" data-col="${c.key}"><option value=""></option>${c.options.map((o) => `<option ${o === v ? "selected" : ""}>${o}</option>`).join("")}</select>`
+          : `<input data-row="${r.id}" data-col="${c.key}" value="${ST.esc(v)}">`;
+        return `<td class="editable">${ctl}</td>`;
+      }).join("")}</tr>`).join("")}</table></div>`;
+    el.querySelectorAll("[data-row]").forEach((ctl) => ctl.onchange = () =>
+      send("edit_cell", { sheet: sh.name, row: ctl.dataset.row, column: ctl.dataset.col, value: ctl.value }));
+  } else if (currentApp === "fields") {
+    el.innerHTML = `<table class="fields">${st.fields.map((f) => `<tr><td>${ST.esc(f.label)}</td><td>${f.readonly
+      ? `<span class="mono">${ST.num(f.value)}</span>` : `<input data-field="${f.key}" value="${f.value ?? ""}" placeholder="0.00">`}</td></tr>`).join("")}</table>`;
+    el.querySelectorAll("[data-field]").forEach((i) => i.onchange = () => send("set_field", { field: i.dataset.field, value: i.value }));
+  }
+}
+
+function renderFeed() {
+  const items = S.events.filter((e) => e.type !== "view").slice(-40).reverse();
+  $("feed").innerHTML = items.map((e) => {
+    const p = e.payload;
+    const txt = e.type === "think" ? `💬 ${ST.esc(p.text)}`
+      : e.type === "edit_cell" ? `✎ ${p.sheet} ${p.row}.${p.column} = ${ST.esc(p.value)}`
+      : e.type === "set_field" ? `✎ ${p.field} = ${p.value}`
+      : e.type === "send_email" ? `✉ to ${ST.esc(p.to)}` : e.type;
+    return `<div><span class="muted">${e.ts}s</span> ${txt}</div>`;
+  }).join("") || '<div class="muted">Your actions and notes appear here.</div>';
+}
+
+async function addNote(text) {
+  if (!text.trim()) return;
+  await send("think", { text: text.trim() });
+}
+$("add-note").onclick = async () => { await addNote($("note").value); $("note").value = ""; };
+$("note").addEventListener("keydown", async (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); await addNote($("note").value); $("note").value = ""; } });
+$("mic").onclick = () => {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) return ST.toast("Voice input isn't supported in this browser. Type your notes instead.");
+  if (speech) { speech.stop(); speech = null; $("mic").textContent = "🎙 Voice"; return; }
+  speech = new SR(); speech.continuous = true; speech.lang = "en-US";
+  speech.onresult = (ev) => { for (let i = ev.resultIndex; i < ev.results.length; i++) if (ev.results[i].isFinal) addNote(ev.results[i][0].transcript); };
+  speech.onend = () => { if (speech) speech.start(); };
+  speech.start(); $("mic").textContent = "■ Stop voice";
+};
+$("finish").onclick = async () => { if (await send("submit", {})) { ST.toast("Marked finished. Check quality next."); } };
+$("check").onclick = async () => {
+  $("report").innerHTML = '<p class="muted">Checking…</p>';
+  try { showReport(await ST.api(`/api/sessions/${S.id}/check`, { method: "POST" })); }
+  catch (e) { $("report").innerHTML = `<div class="notice bad">${ST.esc(e.message)}</div>`; }
+};
+function showReport(r) {
+  $("report").innerHTML = ST.reportHTML(r);
+  $("submit").classList.toggle("hidden", !r.can_submit || S.status === "submitted");
+}
+$("submit").onclick = async () => {
+  try {
+    const r = await ST.api(`/api/sessions/${S.id}/submit`, { method: "POST" });
+    ST.toast(`Submitted as record #${r.record_id}. A reviewer will look at it.`);
+    location.hash = ""; loadList();
+  } catch (e) { ST.toast(e.message); }
+};
+$("back").onclick = () => { location.hash = ""; loadList(); };
+
+(async () => {
+  await ST.topbar("/expert", ["expert"]);
+  const m = location.hash.match(/session=(\d+)/);
+  if (m) { try { await openSession(m[1]); return; } catch (e) {} }
+  loadList();
+})();
+</script>
+</body></html>

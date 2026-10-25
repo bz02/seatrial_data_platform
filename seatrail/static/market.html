@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dataset Marketplace</title>
+<link rel="stylesheet" href="/static/app.css">
+</head><body>
+<main>
+  <div class="row"><h1>Dataset marketplace</h1><div class="spacer"></div><span id="mode" class="small muted"></span></div>
+  <p class="muted">Verified expert trajectories for training and evaluating agents. Every record passed automatic verification, model review and a human reviewer.</p>
+  <div class="tabs" id="tabs"></div>
+  <div id="view"></div>
+</main>
+<script src="/static/common.js"></script>
+<script>
+let me = null, tab = "catalog";
+const $ = (id) => document.getElementById(id);
+
+function tabs() {
+  const t = [["catalog", "Catalog"]];
+  if (me.role === "buyer") t.push(["purchases", "My purchases"]);
+  if (me.role === "admin") t.push(["admin", "Manage datasets"], ["ledger", "Revenue & fees"]);
+  if (me.role === "seller") t.push(["sell", "Sell a dataset"]);
+  $("tabs").innerHTML = t.map(([k, l]) => `<button class="${k === tab ? "on" : ""}" data-t="${k}">${l}</button>`).join("");
+  $("tabs").querySelectorAll("button").forEach((b) => b.onclick = () => { tab = b.dataset.t; render(); });
+}
+
+async function render() {
+  tabs();
+  const v = $("view");
+  if (tab === "catalog") {
+    const ds = await ST.api("/api/market/datasets");
+    v.innerHTML = `<div class="grid cols-2">${ds.map((d) => `
+      <div class="panel"><div class="row"><h2 style="margin:0">${ST.esc(d.name)}</h2><div class="spacer"></div><b>${ST.money(d.price_cents)}</b></div>
+        <p class="small muted">${ST.esc(d.seller)} · v${d.version} · ${ST.esc(d.license)}</p>
+        <p>${ST.esc(d.description)}</p>
+        <div class="kpis"><div class="kpi"><div class="v">${d.stats.records}</div><div class="l">records</div></div>
+          <div class="kpi"><div class="v">${d.stats.experts}</div><div class="l">experts</div></div>
+          <div class="kpi"><div class="v">${ST.pct(d.stats.mean_quality)}</div><div class="l">mean quality</div></div>
+          <div class="kpi"><div class="v">${d.stats.mean_steps}</div><div class="l">steps / record</div></div></div>
+        <p class="small">${Object.entries(d.stats.templates || {}).map(([k, n]) => `<span class="tag gray">${ST.label(k)} ×${n}</span>`).join(" ")}</p>
+        <button class="primary" data-d="${d.id}">View details</button></div>`).join("") || '<p class="muted">No datasets listed yet.</p>'}</div>`;
+    v.querySelectorAll("[data-d]").forEach((b) => b.onclick = () => detail(b.dataset.d));
+  } else if (tab === "purchases") {
+    const ps = await ST.api("/api/market/purchases");
+    v.innerHTML = `<div class="panel tight"><table><tr><th>Order</th><th>Dataset</th><th>Paid</th><th>Date</th><th>Download</th></tr>
+      ${ps.map((p) => `<tr><td>#${p.id}</td><td>${ST.esc(p.name)}</td><td class="num">${ST.money(p.gross_cents)}</td><td class="small">${ST.date(p.created_at)}</td>
+        <td>${files(p.dataset_id)}</td></tr>`).join("") || '<tr><td colspan="5" class="muted">No purchases yet.</td></tr>'}</table></div>`;
+  } else if (tab === "admin") {
+    const ds = await ST.api("/api/admin/datasets");
+    v.innerHTML = `<div class="grid cols-2"><div class="panel"><h2>Package approved records</h2>
+      <div class="grid"><label class="f">Name<input id="n" value="Accounting Agent Trajectories"></label>
+      <label class="f">Description<textarea id="desc" rows="3">Verified expert trajectories with step-level reasoning.</textarea></label>
+      <div class="row"><label class="f">Template<select id="tpl"><option value="">All</option><option>bank_reconciliation</option><option>ap_three_way_match</option><option>expense_audit</option></select></label>
+      <label class="f">Min quality<input id="mq" type="number" step="0.05" value="0.7" style="width:90px"></label>
+      <label class="f">Price (USD)<input id="price" type="number" value="1500" style="width:110px"></label></div>
+      <div><button class="primary" id="create">Create and list</button></div></div></div>
+      <div class="panel tight"><table><tr><th>#</th><th>Dataset</th><th>Records</th><th>Price</th><th>Status</th></tr>
+      ${ds.map((d) => `<tr><td>${d.id}</td><td>${ST.esc(d.name)}</td><td class="num">${d.stats.records}</td><td class="num">${ST.money(d.price_cents)}</td><td>${ST.statusTag(d.status)}</td></tr>`).join("")}</table></div></div>`;
+    $("create").onclick = async () => {
+      try {
+        await ST.api("/api/admin/datasets", { method: "POST", body: { name: $("n").value, description: $("desc").value,
+          template: $("tpl").value, min_quality: +$("mq").value, price_cents: Math.round(+$("price").value * 100) } });
+        ST.toast("Dataset listed"); render();
+      } catch (e) { ST.toast(e.message); }
+    };
+  } else if (tab === "ledger") {
+    const l = await ST.api("/api/admin/ledger");
+    v.innerHTML = `<div class="kpis">
+      <div class="kpi"><div class="v">${l.orders}</div><div class="l">orders</div></div>
+      <div class="kpi"><div class="v">${ST.money(l.gross_cents)}</div><div class="l">gross sales</div></div>
+      <div class="kpi"><div class="v">${ST.money(l.platform_fee_cents)}</div><div class="l">platform revenue</div></div>
+      <div class="kpi"><div class="v">${ST.money(l.expert_revenue_share_cents)}</div><div class="l">expert revenue share</div></div>
+      <div class="kpi"><div class="v">${ST.money(l.task_rewards_paid_cents)}</div><div class="l">task rewards paid</div></div>
+      <div class="kpi"><div class="v">${ST.money(l.seller_net_cents)}</div><div class="l">third-party seller payouts</div></div></div>
+      <div class="panel" style="margin-top:16px"><h2>Fee model</h2>
+      <p><b>Now (platform sells):</b> experts get a fixed task reward when their record is approved, plus ${ST.pct(l.expert_revenue_share)} of every sale of a dataset that includes their work, split by records contributed.</p>
+      <p><b>Later (open marketplace):</b> third-party sellers list datasets and SeaTrail keeps a ${ST.pct(l.take_rate_open_market)} take rate on each sale. Currently <b>${l.open_marketplace ? "on" : "off"}</b> (env <span class="mono">SEATRAIL_OPEN_MARKETPLACE</span>).</p></div>`;
+  } else if (tab === "sell") {
+    const cfg = await ST.api("/api/market/config");
+    v.innerHTML = cfg.open_marketplace
+      ? `<div class="panel"><h2>List a dataset</h2><p class="muted">Upload JSONL in seatrail.trajectory.v1. SeaTrail keeps ${ST.pct(cfg.take_rate)} of each sale.</p>
+         <div class="grid"><input id="n" placeholder="Name"><input id="price" type="number" placeholder="Price USD"><textarea id="jsonl" rows="6" placeholder="Paste JSONL"></textarea><div><button class="primary" id="go">Submit listing</button></div></div></div>`
+      : `<div class="notice">The open marketplace isn't live yet. Today SeaTrail is the only seller; third-party listings (with a ${ST.pct(cfg.take_rate)} take rate) are built and will be switched on later.</div>`;
+    if ($("go")) $("go").onclick = async () => {
+      try { await ST.api("/api/market/seller/listings", { method: "POST", body: { name: $("n").value, price_cents: Math.round(+$("price").value * 100), jsonl: $("jsonl").value } }); ST.toast("Listing submitted for review"); }
+      catch (e) { ST.toast(e.message); }
+    };
+  }
+}
+
+function files(did) {
+  return ["sft_chat.jsonl", "trajectories.jsonl", "rl_environments.jsonl", "datacard.md"].map((f) =>
+    `<a href="#" data-dl="${did}/${f}" class="small">${f}</a>`).join(" · ");
+}
+document.addEventListener("click", async (e) => {
+  const a = e.target.closest("[data-dl]"); if (!a) return;
+  e.preventDefault();
+  const res = await fetch(`/api/market/datasets/${a.dataset.dl.replace("/", "/download/")}`, { headers: { "X-User-Id": ST.userId() } });
+  if (!res.ok) return ST.toast("Download failed");
+  const blob = await res.blob(); const u = URL.createObjectURL(blob);
+  const link = document.createElement("a"); link.href = u; link.download = a.dataset.dl.replace("/", "_"); link.click();
+});
+
+async function detail(id) {
+  const d = await ST.api("/api/market/datasets/" + id);
+  const s = d.sample;
+  $("view").innerHTML = `<button id="bk">← Catalog</button>
+    <div class="grid cols-2" style="margin-top:12px">
+      <div class="panel"><h2>${ST.esc(d.name)}</h2><p>${ST.esc(d.description)}</p>
+        <table><tr><td>Records</td><td class="num">${d.stats.records}</td></tr><tr><td>Experts</td><td class="num">${d.stats.experts}</td></tr>
+        <tr><td>Mean quality</td><td class="num">${ST.pct(d.stats.mean_quality)}</td></tr><tr><td>Verified against answer key</td><td class="num">100%</td></tr>
+        <tr><td>License</td><td>${ST.esc(d.license)}</td></tr></table>
+        <h3>You get</h3><ul class="tight small"><li><span class="mono">sft_chat.jsonl</span>: agent SFT conversations with reasoning + tool calls</li>
+        <li><span class="mono">trajectories.jsonl</span>: full step records, observations, scores</li>
+        <li><span class="mono">rl_environments.jsonl</span>: initial states + verifier, for RL and evals</li><li><span class="mono">datacard.md</span></li></ul>
+        <div class="row" style="margin-top:12px"><b style="font-size:20px">${ST.money(d.price_cents)}</b><div class="spacer"></div>
+          ${d.purchased ? files(d.id) : me.role === "buyer" ? `<button class="primary" id="buy">Buy dataset</button>` : '<span class="small muted">Switch to the buyer demo user to purchase.</span>'}</div></div>
+      <div class="panel"><h2>Sample record</h2><p class="small muted">${ST.esc(s.task?.title || "")} · outcome ${ST.esc(s.outcome?.label)} · verification ${ST.pct(s.outcome?.verification_score)}</p>
+        ${s.steps ? ST.stepsHTML(s.steps.filter((x) => x.action !== undefined)) : ""}</div></div>`;
+  $("bk").onclick = render;
+  if ($("buy")) $("buy").onclick = async () => {
+    try { await ST.api(`/api/market/datasets/${id}/purchase`, { method: "POST" }); ST.toast("Purchased (demo payment)"); detail(id); }
+    catch (e) { ST.toast(e.message); }
+  };
+}
+
+(async () => {
+  me = await ST.topbar("/market", ["buyer", "admin", "seller", "expert"]);
+  const cfg = await ST.api("/api/market/config");
+  $("mode").textContent = cfg.open_marketplace ? "Open marketplace" : "Curated by SeaTrail";
+  render();
+})();
+</script>
+</body></html>

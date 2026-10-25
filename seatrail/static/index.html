@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SeaTrail</title>
+<link rel="stylesheet" href="/static/app.css">
+</head><body>
+<main>
+  <h1>SeaTrail</h1>
+  <p class="muted">Turn how experts actually work into post-training data for AI agents: every step, the reasoning behind it, and a quality check before it counts.</p>
+
+  <div class="grid cols-2" style="margin-top:16px">
+    <section class="panel">
+      <span class="tag">Enterprise edition</span>
+      <h2 style="margin-top:8px">Capture your own experts' real work</h2>
+      <p>Runs in your network. Employees opt in, record work in approved internal apps with a browser recorder, narrate their reasoning, then review and delete steps before submitting. Data stewards approve; ML engineers export SFT and trajectory files for your own post-training.</p>
+      <ul class="tight small">
+        <li>Host allowlist, field masking, sensitive-term redaction, retention purge</li>
+        <li>Model grading off by default, or routed to your own model gateway</li>
+        <li>Every view, approval and export written to an audit log</li>
+      </ul>
+      <div class="row" style="margin-top:12px">
+        <a class="btn primary" href="/enterprise">Open enterprise console</a>
+        <a class="btn" href="/demo-erp">Demo ERP with recorder</a>
+      </div>
+    </section>
+    <section class="panel">
+      <span class="tag">Marketplace edition</span>
+      <h2 style="margin-top:8px">Paid expert tasks in a sandbox</h2>
+      <p>Credentialed experts solve realistic tasks on synthetic company data (spreadsheets and email), narrating as they go. Results are verified automatically against a hidden answer key. Approved work is packaged into datasets that we sell to model builders.</p>
+      <ul class="tight small">
+        <li>Programmatic verification + model-graded reasoning + human review</li>
+        <li>Experts earn a task reward plus a share of every dataset sale</li>
+        <li>Open marketplace with a take rate is built in, switched off for now</li>
+      </ul>
+      <div class="row" style="margin-top:12px">
+        <a class="btn primary" href="/expert">Expert workspace</a>
+        <a class="btn" href="/market">Dataset marketplace</a>
+        <a class="btn" href="/review">Review queue</a>
+      </div>
+    </section>
+  </div>
+
+  <section class="panel" style="margin-top:16px">
+    <h2>Shared core</h2>
+    <div class="grid cols-3 small">
+      <div><b>1. Record</b><br>Event-sourced log of every action plus think-aloud narration (voice or typed).</div>
+      <div><b>2. Convert</b><br>Steps of reasoning → tool call → observation in <span class="mono">seatrail.trajectory.v1</span>; exports to chat SFT, trajectories and RL environments.</div>
+      <div><b>3. Assess</b><br>Verification, reasoning coverage, PII redaction, near-duplicate detection, model rubric grading, then human review.</div>
+    </div>
+  </section>
+  <p class="small muted">Demo build: sign-in is a user switcher in the top bar. Replace with SSO before real use.</p>
+</main>
+<script src="/static/common.js"></script>
+<script>ST.topbar("/");</script>
+</body></html>

@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Enterprise Console</title>
+<link rel="stylesheet" href="/static/app.css">
+<style>.ev td:first-child { width: 28px; } .ev tr.del td { opacity:.45; text-decoration: line-through; }</style>
+</head><body>
+<main>
+  <div class="row"><h1 id="org"></h1><span class="tag">Enterprise · self-hosted</span></div>
+  <p class="muted" id="intro"></p>
+  <div class="tabs" id="tabs"></div>
+  <div id="view"></div>
+</main>
+<script src="/static/common.js"></script>
+<script>
+let me = null, tab = null;
+const $ = (id) => document.getElementById(id);
+const TABS = {
+  employee: [["capture", "My recordings"], ["consent", "Consent & recorder"]],
+  steward: [["overview", "Overview"]],
+  ml_engineer: [["overview", "Overview"], ["exports", "Exports"]],
+  org_admin: [["overview", "Overview"], ["policy", "Privacy policy"], ["exports", "Exports"], ["audit", "Audit log"]],
+};
+
+function drawTabs() {
+  $("tabs").innerHTML = TABS[me.role].map(([k, l]) => `<button class="${k === tab ? "on" : ""}" data-t="${k}">${l}</button>`).join("");
+  $("tabs").querySelectorAll("button").forEach((b) => b.onclick = () => { tab = b.dataset.t; render(); });
+}
+
+async function render() {
+  drawTabs();
+  const v = $("view");
+  v.innerHTML = '<p class="muted">Loading…</p>';
+  try { await VIEWS[tab](v); } catch (e) { v.innerHTML = `<div class="notice bad">${ST.esc(e.message)}</div>`; }
+}
+
+const VIEWS = {
+  async consent(v) {
+    const t = await ST.api("/api/ent/my/token");
+    const p = await ST.api("/api/ent/policy");
+    v.innerHTML = `<div class="grid cols-2"><div class="panel"><h2>Recording consent</h2>
+      <p>If you opt in, the SeaTrail recorder can capture your clicks, form entries and spoken reasoning <b>only</b> on these company apps:</p>
+      <p>${p.allowed_hosts.map((h) => `<span class="tag gray mono">${ST.esc(h)}</span>`).join(" ")}</p>
+      <ul class="tight small"><li>Nothing is recorded until you press Start, and you can pause or stop anytime.</li>
+        <li>Password, bank and other sensitive fields are masked before they leave your browser.</li>
+        <li>You review every recording and can delete steps or the whole recording before anything is submitted.</li>
+        <li>Recordings stay on ${ST.esc(me.org)}'s own servers and are used only to train ${ST.esc(me.org)}'s internal AI. Raw recordings are deleted after ${p.retention_days} days.</li></ul>
+      ${t.consented ? `<div class="notice ok">You opted in.</div><div class="row" style="margin-top:8px"><button class="danger" id="revoke">Withdraw consent</button></div>`
+        : `<button class="primary" id="give">I agree, turn on recording</button>`}</div>
+      <div class="panel"><h2>Recorder</h2>${t.consented ? `
+        <p class="small">Install the browser extension and paste this server address and your personal token:</p>
+        <table><tr><td>Server</td><td class="mono">${location.origin}</td></tr><tr><td>Token</td><td class="mono" style="word-break:break-all">${ST.esc(t.capture_token)}</td></tr></table>
+        <p class="small muted">Or try it now in the demo ERP, which has the recorder built in.</p>
+        <a class="btn primary" href="/demo-erp" id="demo">Open demo ERP</a>` : '<p class="muted">Available after you opt in.</p>'}</div></div>`;
+    if ($("give")) $("give").onclick = async () => { await ST.api("/api/ent/consent", { method: "POST" }); render(); };
+    if ($("revoke")) $("revoke").onclick = async () => { await ST.api("/api/ent/consent", { method: "DELETE" }); render(); };
+    if ($("demo")) localStorage.setItem("seatrail_demo_token", t.capture_token);
+  },
+
+  async capture(v) {
+    const rows = await ST.api("/api/ent/my/sessions");
+    v.innerHTML = `<div class="panel tight"><table><tr><th>#</th><th>Goal</th><th>Workflow</th><th>Steps</th><th>Recorded</th><th>Status</th></tr>
+      ${rows.map((r) => `<tr class="click" data-id="${r.id}"><td>${r.id}</td><td>${ST.esc(r.goal) || '<span class="muted">(add a goal)</span>'}</td>
+        <td>${ST.label(r.workflow)}</td><td class="num">${r.n_events}</td><td class="small">${ST.date(r.started_at)}</td>
+        <td>${r.record_status ? ST.statusTag(r.record_status) : ST.statusTag(r.status)}</td></tr>`).join("")
+        || '<tr><td colspan="6" class="muted">No recordings yet. Opt in under "Consent & recorder", then record in an approved app.</td></tr>'}</table></div>
+      <div id="ep" style="margin-top:16px"></div>`;
+    v.querySelectorAll("tr[data-id]").forEach((tr) => tr.onclick = () => episode(tr.dataset.id));
+    const open = rows.find((r) => r.status !== "submitted");
+    if (open) episode(open.id);
+  },
+
+  async overview(v) {
+    const s = await ST.api("/api/ent/stats");
+    v.innerHTML = `<div class="kpis">
+      <div class="kpi"><div class="v">${s.consented}/${s.employees}</div><div class="l">employees opted in</div></div>
+      <div class="kpi"><div class="v">${s.sessions}</div><div class="l">recordings</div></div>
+      <div class="kpi"><div class="v">${s.records.needs_review || 0}</div><div class="l">awaiting review</div></div>
+      <div class="kpi"><div class="v">${s.records.approved || 0}</div><div class="l">approved records</div></div></div>
+      <div class="grid cols-2" style="margin-top:16px"><div class="panel"><h2>Approved by workflow</h2><table><tr><th>Workflow</th><th>Records</th><th>Mean quality</th></tr>
+        ${s.approved_by_workflow.map((w) => `<tr><td>${ST.label(w.workflow)}</td><td class="num">${w.n}</td><td class="num">${ST.pct(w.q)}</td></tr>`).join("") || '<tr><td colspan="3" class="muted">None yet.</td></tr>'}</table></div>
+      <div class="panel"><h2>Next step</h2>${["steward", "org_admin"].includes(me.role)
+        ? `<p>Review submitted recordings before they can be used for training.</p><a class="btn primary" href="/review">Open review queue</a>`
+        : `<p>Export approved records as post-training data.</p><button class="primary" onclick="tab='exports';render()">Go to exports</button>`}</div></div>`;
+  },
+
+  async exports(v) {
+    const ex = await ST.api("/api/ent/exports");
+    const p = await ST.api("/api/ent/policy");
+    v.innerHTML = `<div class="grid cols-2"><div class="panel"><h2>New export</h2>
+      <p class="small muted">Only approved records are exported. Files stay on this server.</p>
+      <div class="grid"><label class="f">Format<select id="fmt"><option value="both">SFT chat + trajectories</option><option value="chat">SFT chat only</option><option value="trajectory">Trajectories only</option></select></label>
+      <label class="f">Workflow<select id="wf"><option value="">All</option>${p.workflows.map((w) => `<option value="${w}">${ST.label(w)}</option>`).join("")}</select></label>
+      <label class="f">Minimum quality<input id="mq" type="number" step="0.05" value="0.6"></label>
+      <div><button class="primary" id="go">Create export</button></div></div></div>
+      <div class="panel tight"><table><tr><th>#</th><th>Records</th><th>Filters</th><th>Files</th></tr>
+      ${ex.map((e) => `<tr><td>${e.id}<div class="small muted">${ST.date(e.created_at)}</div></td><td class="num">${e.record_ids.length}</td>
+        <td class="small">${ST.esc(e.format)} · ${ST.esc(e.filters.workflow || "all")} · ≥${e.filters.min_quality}</td>
+        <td class="small">${e.files.map((f) => `<a href="#" data-x="${e.id}/${f}">${f}</a>`).join("<br>")}</td></tr>`).join("") || '<tr><td colspan="4" class="muted">No exports yet.</td></tr>'}</table></div></div>`;
+    $("go").onclick = async () => {
+      try { const r = await ST.api("/api/ent/exports", { method: "POST", body: { format: $("fmt").value, workflow: $("wf").value, min_quality: +$("mq").value } });
+        ST.toast(`Exported ${r.records} records`); render(); } catch (e) { ST.toast(e.message); }
+    };
+    v.querySelectorAll("[data-x]").forEach((a) => a.onclick = async (e) => {
+      e.preventDefault();
+      const res = await fetch("/api/ent/exports/" + a.dataset.x, { headers: { "X-User-Id": ST.userId() } });
+      const u = URL.createObjectURL(await res.blob()); const l = document.createElement("a"); l.href = u; l.download = a.dataset.x.replace("/", "_"); l.click();
+    });
+  },
+
+  async policy(v) {
+    const p = await ST.api("/api/ent/policy");
+    v.innerHTML = `<div class="grid cols-2"><div class="panel"><h2>Capture & privacy policy</h2><div class="grid">
+      <label class="f">Apps the recorder may run on (one host per line)<textarea id="hosts" rows="3">${p.allowed_hosts.join("\n")}</textarea></label>
+      <label class="f">Always-masked fields (CSS selectors)<textarea id="mask" rows="3">${p.mask_selectors.join("\n")}</textarea></label>
+      <label class="f">Sensitive terms to redact everywhere (customers, code names)<textarea id="terms" rows="3">${p.sensitive_terms.join("\n")}</textarea></label>
+      <label class="f"><span><input type="checkbox" id="vals" ${p.capture_input_values ? "checked" : ""}> Record typed values (off = record only which field was filled)</span></label>
+      <label class="f">Model-assisted grading<select id="judge">
+        <option value="off" ${p.judge === "off" ? "selected" : ""}>Off: nothing leaves our network</option>
+        <option value="auto" ${p.judge === "auto" ? "selected" : ""}>On when credentials are configured</option></select></label>
+      <label class="f">Model gateway URL (optional, e.g. our Bedrock/Vertex proxy)<input id="gw" value="${ST.esc(p.judge_base_url || "")}"></label>
+      <label class="f">Delete raw recordings after (days)<input id="ret" type="number" value="${p.retention_days}"></label>
+      <div class="row"><button class="primary" id="save">Save policy</button><button id="purge">Run retention purge now</button></div></div></div>
+      <div class="panel"><h2>Where data goes</h2><ul class="tight small">
+        <li>Recorder → this SeaTrail server, inside your network. Hosts outside the allowlist are ignored in the browser and again on the server.</li>
+        <li>Masked fields are replaced in the browser; the value is never sent.</li>
+        <li>Rule-based redaction (emails, phones, SSNs, card and account numbers, your sensitive terms) runs on the server before anyone reviews a record.</li>
+        <li>Model grading is ${p.judge === "off" ? "<b>off</b>, so no record leaves the server" : "on, records are sent to " + ST.esc(p.judge_base_url || "the Anthropic API")}.</li>
+        <li>Exports are written to this server and every download is logged.</li></ul></div></div>`;
+    const lines = (id) => $(id).value.split("\n").map((s) => s.trim()).filter(Boolean);
+    $("save").onclick = async () => {
+      await ST.api("/api/ent/policy", { method: "PUT", body: { allowed_hosts: lines("hosts"), mask_selectors: lines("mask"), sensitive_terms: lines("terms"),
+        capture_input_values: $("vals").checked, judge: $("judge").value, judge_base_url: $("gw").value || null, retention_days: +$("ret").value } });
+      ST.toast("Policy saved"); render();
+    };
+    $("purge").onclick = async () => { const r = await ST.api("/api/ent/retention/purge", { method: "POST" }); ST.toast(`Purged raw events from ${r.sessions_purged} recordings`); };
+  },
+
+  async audit(v) {
+    const rows = await ST.api("/api/ent/audit");
+    v.innerHTML = `<div class="panel tight"><div class="table-wrap" style="max-height:70vh"><table><tr><th>When</th><th>Who</th><th>Action</th><th>Target</th><th>Detail</th></tr>
+      ${rows.map((r) => `<tr><td class="small">${ST.date(r.created_at)}</td><td class="small">${ST.esc(r.user_name || "")}</td><td><span class="tag gray">${ST.esc(r.action)}</span></td>
+        <td class="mono">${ST.esc(r.target)}</td><td class="mono">${ST.esc(JSON.stringify(r.detail))}</td></tr>`).join("")}</table></div></div>`;
+  },
+};
+
+async function episode(id) {
+  const e = await ST.api("/api/ent/sessions/" + id);
+  const closed = e.status === "submitted";
+  const box = $("ep");
+  box.innerHTML = `<div class="grid cols-2">
+    <div class="panel"><div class="row"><h2 style="margin:0">Recording #${e.id}</h2>${ST.statusTag(e.status)}</div>
+      <p class="small muted">Check what was captured. Delete anything you don't want kept, then label it and submit.</p>
+      <div class="grid"><label class="f">What were you trying to do?<input id="goal" value="${ST.esc(e.goal)}" ${closed ? "disabled" : ""}></label>
+      <div class="row"><label class="f">Workflow<select id="wf" ${closed ? "disabled" : ""}><option value=""></option>${e.workflows.map((w) => `<option value="${w}" ${w === e.workflow ? "selected" : ""}>${ST.label(w)}</option>`).join("")}</select></label>
+      <label class="f">Outcome<select id="out" ${closed ? "disabled" : ""}>${["", "success", "partial", "failed"].map((o) => `<option ${o === e.outcome ? "selected" : ""}>${o}</option>`).join("")}</select></label></div></div>
+      <h3>Captured steps</h3>
+      <div class="table-wrap" style="max-height:340px"><table class="ev">${e.events.map((x) => `<tr class="${x.deleted ? "del" : ""}">
+        <td>${x.deleted || closed ? "" : `<input type="checkbox" data-seq="${x.seq}">`}</td><td class="small muted">${x.ts}s</td><td class="small">${ST.esc(x.summary)}</td></tr>`).join("")}</table></div>
+      ${closed ? "" : `<div class="row" style="margin-top:10px"><button class="danger" id="del">Delete selected steps</button><button id="discard" class="danger">Discard recording</button>
+        <div class="spacer"></div><button id="save">Save labels</button><button class="primary" id="chk">Check quality</button></div>`}
+    </div>
+    <div class="panel"><h2>Quality check</h2><div id="rep">${e.report ? ST.reportHTML(e.report) : '<p class="muted">Run a check to see how useful this recording is for training.</p>'}</div>
+      ${closed ? "" : '<button class="primary hidden" id="sub" style="width:100%;margin-top:10px">Submit for review</button>'}
+      <h3>Training data preview <span class="small muted">(after redaction)</span></h3>
+      ${e.preview ? ST.stepsHTML(e.preview.steps, { showObs: false }) : '<p class="muted">Empty.</p>'}</div></div>`;
+  if (closed) return;
+  const save = () => ST.api("/api/ent/sessions/" + id, { method: "PATCH", body: { goal: $("goal").value, workflow: $("wf").value, outcome: $("out").value } });
+  $("save").onclick = async () => { await save(); ST.toast("Saved"); };
+  $("del").onclick = async () => {
+    const seqs = [...box.querySelectorAll("[data-seq]:checked")].map((c) => +c.dataset.seq);
+    if (!seqs.length) return ST.toast("Select steps first");
+    await ST.api("/api/ent/sessions/" + id, { method: "PATCH", body: { delete_seqs: seqs } });
+    ST.toast(`Deleted ${seqs.length} steps`); episode(id);
+  };
+  $("discard").onclick = async () => { if (!confirm("Delete this whole recording? This can't be undone.")) return;
+    await ST.api(`/api/ent/sessions/${id}/discard`, { method: "POST" }); render(); };
+  $("chk").onclick = async () => {
+    await save();
+    const r = await ST.api(`/api/ent/sessions/${id}/check`, { method: "POST" });
+    $("rep").innerHTML = ST.reportHTML(r);
+    $("sub").classList.toggle("hidden", !r.can_submit);
+  };
+  if (e.report && e.report.can_submit) $("sub").classList.remove("hidden");
+  $("sub").onclick = async () => {
+    try { await ST.api(`/api/ent/sessions/${id}/submit`, { method: "POST" }); ST.toast("Submitted to your data steward"); render(); }
+    catch (err) { ST.toast(err.message); }
+  };
+}
+
+(async () => {
+  me = await ST.topbar("/enterprise", ["employee", "steward", "ml_engineer", "org_admin"]);
+  $("org").textContent = me.org;
+  $("intro").textContent = {
+    employee: "Record how you do your work so the company's internal AI can learn from it. You control what gets submitted.",
+    steward: "Review recordings before they become training data.",
+    ml_engineer: "Export approved recordings as post-training datasets.",
+    org_admin: "Set what can be recorded, how data is protected, and who did what.",
+  }[me.role];
+  tab = TABS[me.role][0][0];
+  render();
+})();
+</script>
+</body></html>

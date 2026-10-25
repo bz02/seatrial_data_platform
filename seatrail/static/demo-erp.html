@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AP Inbox - Halcyon ERP</title>
+<style>
+  :root { --bg:#eef1f5; --panel:#fff; --ink:#22262e; --muted:#69707d; --line:#d9dee6; --brand:#3b5bdb; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#111418; --panel:#1a1f26; --ink:#e4e7ec; --muted:#98a1ad; --line:#2b323c; --brand:#748ffc; } }
+  * { box-sizing: border-box; } body { margin:0; font:14px/1.45 system-ui, sans-serif; background:var(--bg); color:var(--ink); }
+  header { background:#1f2a44; color:#fff; padding:10px 18px; display:flex; gap:18px; align-items:center; flex-wrap:wrap; }
+  header a { color:#c5d0ea; text-decoration:none; } header a.on { color:#fff; font-weight:600; }
+  main { max-width: 980px; margin: 0 auto; padding: 18px 16px 120px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:16px; margin-bottom:14px; }
+  table { width:100%; border-collapse:collapse; } th, td { text-align:left; padding:7px 8px; border-bottom:1px solid var(--line); }
+  th { color:var(--muted); font-size:12px; } td.n { text-align:right; font-variant-numeric: tabular-nums; }
+  label { display:grid; gap:4px; font-size:13px; color:var(--muted); }
+  input, select, textarea { font:inherit; padding:7px 8px; border:1px solid var(--line); border-radius:6px; background:var(--panel); color:var(--ink); }
+  .form { display:grid; grid-template-columns: repeat(auto-fit, minmax(220px,1fr)); gap:12px; }
+  button { font:inherit; padding:7px 14px; border-radius:6px; border:1px solid var(--brand); background:var(--brand); color:#fff; cursor:pointer; }
+  button.sec { background:transparent; color:var(--brand); }
+  .banner { background:#fff4e5; color:#7a4b00; border:1px solid #ffd8a8; padding:10px 12px; border-radius:8px; margin-bottom:12px; }
+  .hide { display:none; }
+</style>
+</head><body>
+<header><b>Halcyon ERP</b><a href="#invoices" data-r="invoices">AP inbox</a><a href="#new" data-r="new">New invoice</a><a href="#pos" data-r="pos">Purchase orders</a>
+  <span style="margin-left:auto;font-size:12px;color:#c5d0ea">Demo internal app · <a href="/enterprise">back to SeaTrail</a></span></header>
+<main>
+  <div id="banner" class="banner hide">To record here, open SeaTrail &gt; Enterprise as an employee and opt in under "Consent &amp; recorder". The recorder appears in the bottom-right corner.</div>
+
+  <section id="r-invoices" class="card">
+    <h2 style="margin-top:0">AP inbox</h2>
+    <table><tr><th>Received</th><th>Vendor</th><th>Invoice</th><th>PO</th><th class="n">Amount</th><th></th></tr>
+      <tr><td>Oct 21</td><td>Cascade Paper Co.</td><td>INV-31877</td><td>PO-5120</td><td class="n">2,418.60</td><td><button class="sec" onclick="location.hash='new'">Enter</button></td></tr>
+      <tr><td>Oct 22</td><td>Summit IT Services</td><td>INV-33102</td><td>PO-5133</td><td class="n">7,950.00</td><td><button class="sec" onclick="location.hash='new'">Enter</button></td></tr>
+      <tr><td>Oct 22</td><td>Harbor Electric</td><td>INV-34015</td><td>—</td><td class="n">1,180.00</td><td><button class="sec" onclick="location.hash='new'">Enter</button></td></tr>
+    </table>
+    <p><button onclick="location.hash='new'">New invoice</button></p>
+  </section>
+
+  <section id="r-new" class="card hide">
+    <h2 style="margin-top:0">New invoice</h2>
+    <form id="inv-form" class="form" onsubmit="event.preventDefault(); document.getElementById('saved').classList.remove('hide');">
+      <label for="vendor">Vendor<input id="vendor" list="vendors"></label>
+      <datalist id="vendors"><option>Cascade Paper Co.</option><option>Summit IT Services</option><option>Harbor Electric</option></datalist>
+      <label for="invno">Invoice number<input id="invno"></label>
+      <label for="po">PO number<input id="po"></label>
+      <label for="amt">Amount<input id="amt" inputmode="decimal"></label>
+      <label for="gl">GL account<select id="gl"><option></option><option>6100 Office expense</option><option>6200 IT services</option><option>6300 Repairs &amp; maintenance</option><option>2000 Accounts payable</option></select></label>
+      <label for="bank">Vendor bank account<input id="bank" data-sensitive autocomplete="off"></label>
+      <label for="memo" style="grid-column:1/-1">Memo<textarea id="memo" rows="2"></textarea></label>
+      <div style="grid-column:1/-1"><button type="submit">Save and route for approval</button></div>
+    </form>
+    <p id="saved" class="hide" style="color:#2b8a3e">Saved. Routed to approver.</p>
+  </section>
+
+  <section id="r-pos" class="card hide">
+    <h2 style="margin-top:0">Purchase orders</h2>
+    <table><tr><th>PO</th><th>Vendor</th><th>Item</th><th class="n">Qty</th><th class="n">Unit price</th><th>Received</th></tr>
+      <tr><td>PO-5120</td><td>Cascade Paper Co.</td><td>Copy paper (pallet)</td><td class="n">6</td><td class="n">403.10</td><td>Full</td></tr>
+      <tr><td>PO-5133</td><td>Summit IT Services</td><td>Laptop docking station</td><td class="n">30</td><td class="n">265.00</td><td>Full</td></tr>
+    </table>
+  </section>
+</main>
+<script src="/recorder/recorder.js"></script>
+<script>
+function route() {
+  const r = (location.hash || "#invoices").slice(1);
+  ["invoices", "new", "pos"].forEach((k) => document.getElementById("r-" + k).classList.toggle("hide", k !== r));
+  document.querySelectorAll("header a[data-r]").forEach((a) => a.classList.toggle("on", a.dataset.r === r));
+  document.title = { invoices: "AP Inbox", new: "New invoice", pos: "Purchase orders" }[r] + " - Halcyon ERP";
+}
+window.addEventListener("hashchange", route); route();
+let token = null;
+try { token = new URLSearchParams(location.search).get("token") || localStorage.getItem("seatrail_demo_token"); } catch (e) {}
+if (token) SeaTrailRecorder.init({ apiBase: location.origin, token }).then((r) => { if (!r.enabled) document.getElementById("banner").classList.remove("hide"); });
+else document.getElementById("banner").classList.remove("hide");
+</script>
+</body></html>

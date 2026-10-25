@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Review Queue</title>
+<link rel="stylesheet" href="/static/app.css">
+<style>.rv { display:grid; grid-template-columns: 360px minmax(0,1fr); gap:16px; align-items:start; }
+@media (max-width: 980px) { .rv { grid-template-columns: 1fr; } }</style>
+</head><body>
+<main>
+  <h1>Review queue</h1>
+  <p class="muted" id="intro"></p>
+  <div class="tabs" id="status-tabs"></div>
+  <div class="rv">
+    <div class="panel tight"><div class="table-wrap" style="max-height:75vh"><table id="queue"></table></div></div>
+    <div class="panel" id="detail"><p class="muted">Pick a record to review.</p></div>
+  </div>
+</main>
+<script src="/static/common.js"></script>
+<script>
+let status = "needs_review";
+const $ = (id) => document.getElementById(id);
+
+async function loadQueue() {
+  $("status-tabs").innerHTML = ["needs_review", "approved", "rejected"].map((s) =>
+    `<button class="${s === status ? "on" : ""}" data-s="${s}">${ST.label(s)}</button>`).join("");
+  $("status-tabs").querySelectorAll("button").forEach((b) => b.onclick = () => { status = b.dataset.s; loadQueue(); });
+  const rows = await ST.api("/api/review/queue?status=" + status);
+  $("queue").innerHTML = `<tr><th>#</th><th>Workflow</th><th>By</th><th>Quality</th></tr>` + (rows.map((r) =>
+    `<tr class="click" data-id="${r.id}"><td>${r.id}<div class="small muted">${r.source}</div></td><td>${ST.label(r.template)}
+      ${r.flags.length ? `<div>${r.flags.map((f) => `<span class="tag gray small">${ST.label(f)}</span>`).join(" ")}</div>` : ""}</td>
+      <td class="small">${ST.esc(r.author)}</td><td class="num">${ST.pct(r.quality_score)}</td></tr>`).join("")
+    || `<tr><td colspan="4" class="muted">Nothing here.</td></tr>`);
+  $("queue").querySelectorAll("tr[data-id]").forEach((tr) => tr.onclick = () => show(tr.dataset.id));
+}
+
+async function show(id) {
+  const r = await ST.api("/api/review/records/" + id);
+  const rec = r.record, j = r.judge, v = r.verification;
+  const rub = ["correctness", "specificity", "consistency", "coverage", "teachability"];
+  $("detail").innerHTML = `
+    <div class="row"><h2 style="margin:0">Record #${r.id}</h2>${ST.statusTag(r.status)}<span class="tag gray">${r.source}</span><div class="spacer"></div>
+      <div class="score">${ST.pct(r.quality_score)}</div></div>
+    <p class="muted small">${ST.esc(rec.task.title)} · by ${ST.esc(r.author)} ${r.credentials ? "(" + ST.esc(r.credentials) + ")" : ""} · ${rec.steps.length} steps · ${rec.provenance.duration_s}s</p>
+    <div class="grid cols-3">
+      <div><h3>Verification</h3>${v ? `<table>${v.checks.map((c) => `<tr><td>${c.name}</td><td class="num">${ST.pct(c.score)}</td></tr>`).join("")}</table>`
+        : `<p class="small">No answer key (real work). Self-reported outcome: <b>${ST.esc(rec.outcome.label)}</b></p>`}</div>
+      <div><h3>Model review <span class="small muted">(${ST.esc(j.mode)})</span></h3><table>${rub.map((k) => `<tr><td>${k}</td><td class="num">${j[k]}/5</td></tr>`).join("")}</table></div>
+      <div><h3>Privacy</h3><p class="small">${r.pii.total} redactions ${ST.esc(Object.entries(r.pii.redactions).map(([k, n]) => k + "×" + n).join(", "))}</p>
+        <h3>Flags</h3><p>${r.flags.map((f) => `<span class="tag gray">${ST.label(f)}</span>`).join(" ") || '<span class="small muted">none</span>'}</p></div>
+    </div>
+    ${j.issues && j.issues.length ? `<div class="notice warn small" style="margin-top:8px"><b>Issues:</b> ${j.issues.map(ST.esc).join(" ")}</div>` : ""}
+    ${r.status === "needs_review" ? `
+      <div class="row" style="margin:14px 0"><input id="notes" placeholder="Notes for the author (optional)" style="flex:1;min-width:200px">
+        <button class="danger" id="rej">Reject</button><button class="primary" id="app">Approve</button></div>`
+      : `<p class="small muted">Reviewed ${ST.date(r.reviewed_at)}${r.review_notes ? ": " + ST.esc(r.review_notes) : ""}</p>`}
+    <div class="row"><h3>Trajectory</h3><div class="spacer"></div><label class="small"><input type="checkbox" id="obs"> show observations</label>
+      <label class="small"><input type="checkbox" id="views"> show views</label></div>
+    <div id="steps"></div>`;
+  const draw = () => $("steps").innerHTML = ST.stepsHTML(rec.steps, { showObs: $("obs").checked, hideViews: !$("views").checked });
+  $("obs").onchange = draw; $("views").onchange = draw; draw();
+  const decide = async (approve) => {
+    await ST.api("/api/review/records/" + id, { method: "POST", body: { approve, notes: $("notes").value } });
+    ST.toast(approve ? "Approved" : "Rejected"); loadQueue(); show(id);
+  };
+  if ($("app")) { $("app").onclick = () => decide(true); $("rej").onclick = () => decide(false); }
+}
+
+(async () => {
+  const me = await ST.topbar("/review", ["admin", "steward", "org_admin"]);
+  $("intro").textContent = me.org_kind === "platform"
+    ? "Marketplace records from experts. Approving pays the expert's task reward and makes the record eligible for datasets."
+    : `Records captured inside ${me.org}. Approved records can be exported for post-training. Every record you open is logged.`;
+  loadQueue();
+})();
+</script>
+</body></html>
