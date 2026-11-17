@@ -1,0 +1,164 @@
+"""Foundry tables. Appended to db.SCHEMA so one `executescript` creates everything.
+
+`foundry_tasks` is the unit a buyer accepts or returns. A foundry task of profile
+`profile-sheet-accounting` points at a row of the existing `tasks` table, so the accounting
+sandbox becomes one environment profile among several instead of a separate system.
+"""
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS contract_batches (
+  id INTEGER PRIMARY KEY,
+  client_name TEXT NOT NULL,
+  deal_type TEXT NOT NULL CHECK (deal_type IN ('OTS','COMMISSIONED','EVAL')),
+  domain TEXT NOT NULL,
+  target_pass_rate_min REAL NOT NULL DEFAULT 0.15,
+  target_pass_rate_max REAL NOT NULL DEFAULT 0.70,
+  warranty_days INTEGER NOT NULL DEFAULT 60,
+  price_per_accepted_task_usd REAL NOT NULL DEFAULT 0,
+  created_at REAL NOT NULL,
+  CHECK (target_pass_rate_min <= target_pass_rate_max)
+);
+
+CREATE TABLE IF NOT EXISTS source_assets (
+  id INTEGER PRIMARY KEY,
+  source_type TEXT NOT NULL CHECK (source_type IN ('REPO','LEGAL_MATTER','CAD_ASSEMBLY','EHR','FINANCE')),
+  raw_uri TEXT NOT NULL,
+  content_hash TEXT NOT NULL DEFAULT '',
+  license_type TEXT NOT NULL DEFAULT '',
+  ai_training_allowed INTEGER NOT NULL DEFAULT 0,
+  chain_of_title_doc_uri TEXT NOT NULL DEFAULT '',
+  pii_scan_status TEXT NOT NULL DEFAULT 'PENDING'
+    CHECK (pii_scan_status IN ('PENDING','CLEAN','REDACTED','BLOCKED')),
+  outcome_leakage_status TEXT NOT NULL DEFAULT 'PENDING'
+    CHECK (outcome_leakage_status IN ('PENDING','CLEAN','FLAGGED')),
+  created_at REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS foundry_tasks (
+  id INTEGER PRIMARY KEY,
+  batch_id INTEGER NOT NULL REFERENCES contract_batches(id),
+  domain TEXT NOT NULL,
+  archetype TEXT NOT NULL CHECK (archetype IN
+    ('MASK_RECONSTRUCT','MULTI_HOP_FLAW','FEATURE_TREE_REBUILD','BUG_FIX','E2E_ENV')),
+  title TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'DRAFT' CHECK (status IN ('DRAFT','SYNTH_CHECK','CALIBRATING',
+    'SME_REVIEW','REWORK','QA_APPROVED','PACKAGED','DELIVERED','ACCEPTED','RETURNED')),
+  author_id INTEGER REFERENCES users(id),
+  env TEXT NOT NULL,              -- EnvSpec JSON (agent-visible)
+  sealed TEXT NOT NULL,           -- SealedSpec, encrypted (grader_isolation.seal)
+  verdict TEXT CHECK (verdict IN ('TOO_HARD_0PCT','SWEET_SPOT','SATURATED_100PCT')),
+  rework_reason TEXT NOT NULL DEFAULT '',
+  version INTEGER NOT NULL DEFAULT 1,
+  created_at REAL NOT NULL,
+  updated_at REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS task_source_assets (
+  task_id INTEGER NOT NULL REFERENCES foundry_tasks(id),
+  asset_id INTEGER NOT NULL REFERENCES source_assets(id),
+  PRIMARY KEY (task_id, asset_id)
+);
+
+CREATE TABLE IF NOT EXISTS task_transitions (
+  id INTEGER PRIMARY KEY,
+  task_id INTEGER NOT NULL REFERENCES foundry_tasks(id),
+  from_status TEXT NOT NULL,
+  to_status TEXT NOT NULL,
+  actor_id INTEGER,
+  reason TEXT NOT NULL DEFAULT '',
+  created_at REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS rubric_criteria (
+  id INTEGER PRIMARY KEY,
+  task_id INTEGER NOT NULL REFERENCES foundry_tasks(id),
+  kind TEXT NOT NULL CHECK (kind IN ('PROGRAMMATIC','ATOMIC_JUDGE','DECOY_NEGATIVE','EXCLUDED_BOUNDARY')),
+  weight REAL NOT NULL DEFAULT 1,
+  spec_json TEXT NOT NULL DEFAULT '{}',
+  ground_truth_evidence_ref TEXT NOT NULL DEFAULT '',
+  created_at REAL NOT NULL
+);
+
+-- golden=1.0 / empty=0.0 proof. A task cannot leave DRAFT without a passing row for its version.
+CREATE TABLE IF NOT EXISTS sanity_checks (
+  id INTEGER PRIMARY KEY,
+  task_id INTEGER NOT NULL REFERENCES foundry_tasks(id),
+  task_version INTEGER NOT NULL,
+  golden_score REAL NOT NULL,
+  empty_score REAL NOT NULL,
+  passed INTEGER NOT NULL,
+  detail TEXT NOT NULL DEFAULT '{}',
+  created_at REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS calibration_runs (
+  id INTEGER PRIMARY KEY,
+  task_id INTEGER NOT NULL REFERENCES foundry_tasks(id),
+  task_version INTEGER NOT NULL,
+  model_name TEXT NOT NULL,
+  k_rollouts INTEGER NOT NULL,
+  pass_count INTEGER NOT NULL,
+  pass_at_1 REAL NOT NULL,
+  pass_at_k REAL NOT NULL,
+  pass_hat_k REAL NOT NULL,         -- pass^k: all k succeed (consistency)
+  mean_score REAL NOT NULL,
+  submission_rate REAL NOT NULL,
+  avg_steps REAL NOT NULL,
+  token_cost_usd REAL NOT NULL,
+  verdict TEXT NOT NULL CHECK (verdict IN ('TOO_HARD_0PCT','SWEET_SPOT','SATURATED_100PCT')),
+  trace_uri TEXT NOT NULL,
+  group_id TEXT NOT NULL,           -- one calibration call across the model panel
+  created_at REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS rollouts (
+  id INTEGER PRIMARY KEY,
+  run_id INTEGER NOT NULL REFERENCES calibration_runs(id),
+  k_index INTEGER NOT NULL,
+  score REAL NOT NULL,
+  passed INTEGER NOT NULL,
+  submitted INTEGER NOT NULL,
+  steps INTEGER NOT NULL,
+  stop_reason TEXT NOT NULL,
+  failure_bucket TEXT,
+  input_tokens INTEGER NOT NULL DEFAULT 0,
+  output_tokens INTEGER NOT NULL DEFAULT 0,
+  cost_usd REAL NOT NULL DEFAULT 0,
+  latency_s REAL NOT NULL DEFAULT 0,
+  grader TEXT NOT NULL DEFAULT '{}',
+  trace_uri TEXT NOT NULL
+);
+
+-- Separation of duties: an author never reviews their own task.
+CREATE TABLE IF NOT EXISTS sme_assignments (
+  id INTEGER PRIMARY KEY,
+  task_id INTEGER NOT NULL REFERENCES foundry_tasks(id),
+  author_id INTEGER NOT NULL REFERENCES users(id),
+  reviewer_id INTEGER NOT NULL REFERENCES users(id),
+  pod TEXT NOT NULL DEFAULT '',
+  active INTEGER NOT NULL DEFAULT 1,
+  created_at REAL NOT NULL,
+  CHECK (author_id != reviewer_id)
+);
+
+CREATE TABLE IF NOT EXISTS cost_ledger (
+  id INTEGER PRIMARY KEY,
+  task_id INTEGER REFERENCES foundry_tasks(id),
+  batch_id INTEGER REFERENCES contract_batches(id),
+  kind TEXT NOT NULL CHECK (kind IN ('SME_LABOR','COMPUTE','MODEL_API','REWORK')),
+  amount_usd REAL NOT NULL,
+  ref TEXT NOT NULL DEFAULT '',
+  created_at REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS jobs (
+  id INTEGER PRIMARY KEY,
+  kind TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('queued','running','done','failed')),
+  params TEXT NOT NULL DEFAULT '{}',
+  result TEXT,
+  error TEXT,
+  created_at REAL NOT NULL,
+  finished_at REAL
+);
+"""

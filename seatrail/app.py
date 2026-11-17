@@ -801,3 +801,9 @@ if RECORDER.exists():
 @app.get("/health")
 def health():
     return {"ok": True, "judge": config.JUDGE_ENABLED, "open_marketplace": config.OPEN_MARKETPLACE}
+
+
+# Foundry API (/api/v1): batches, tasks + state machine, sandbox sanity checks, calibration, reports.
+from .foundry.api import router as foundry_router  # noqa: E402
+
+app.include_router(foundry_router)

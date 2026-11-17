@@ -7,6 +7,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from . import config
+from .foundry.schema import SCHEMA as FOUNDRY_SCHEMA
 
 SCHEMA = """
 -- Organizations. org 0 is the platform itself (marketplace edition).
@@ -271,6 +272,7 @@ def conn() -> sqlite3.Connection:
             _conn = _connect(config.DB_PATH)
             _conn_path = config.DB_PATH
             _conn.executescript(SCHEMA)
+            _conn.executescript(FOUNDRY_SCHEMA)
         return _conn
 
 

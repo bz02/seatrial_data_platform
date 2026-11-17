@@ -13,6 +13,12 @@ Two products share one core:
 | Data owner | The company. Deployed in its network | SeaTrial; sold as datasets or custom orders |
 | Extras | Process discovery: workflow maps, variants, coverage, what to record next | Frontier-model baseline per task, model-vs-expert gap, expert tiers |
 
+**Foundry** (`seatrail/foundry/`, see [docs/foundry.md](docs/foundry.md)): the production line for
+verifiable RL environments and eval tasks. Contract batches, a guarded task state machine, pinned
+sandboxes with anti-cheat grading (golden = 100%, empty = 0% before any task moves), frontier-model
+difficulty calibration (pass@k, pass^k, 0% / 100% rejection) and buyer-ready Loss Analysis reports,
+under `/api/v1`.
+
 Shared core: event-sourced recording → `seatrail.trajectory.v1` records → PII redaction,
 near-duplicate detection, reasoning coverage, model rubric grading (Claude, optional) → consensus
 human review with step-level corrections → export.
@@ -82,7 +88,8 @@ python scripts/bootstrap.py org --name "Acme" --admin-email it@acme.com --admin-
 python -m pytest -q
 ```
 
-32 tests: task generators and verifier, PII redaction, duplicate detection, fee settlement, the
+75 tests: foundry (state machine guards, sandbox isolation against a malicious agent, graders,
+calibration routing and reports with mock models), task generators and verifier, PII redaction, duplicate detection, fee settlement, the
 model-grader and baseline-agent call shapes (with a fake client), auth and CSRF, qualification and
 retakes, consensus review, corrections → preference export, process discovery, custom requests,
 leads, and full API flows for both editions.
@@ -115,6 +122,10 @@ seatrail/
     agent.py           frontier-model baseline agent and model-vs-expert gap
   enterprise.py        policy, consent, capture ingest, employee edits, retention, exports
   market.py            datasets, orders, fees, expert revenue share, custom requests
+  foundry/             verifiable-task production line (docs/foundry.md)
+    models.py, schema.py, state_machine.py, store.py, api.py, jobs.py
+    sandbox_runner/    pinned images, MCP tool server, backends, anti-cheat grading, verifiers
+    calibrator/        model adapters, pass@k calibration and routing, loss analysis reports
   demo.py              demo seed data (scripted; never sell or export these)
   static/              landing page and web apps
 recorder/              browser recorder + extension
