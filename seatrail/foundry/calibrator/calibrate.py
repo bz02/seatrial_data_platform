@@ -142,6 +142,8 @@ def calibrate_task(task_id: int, adapters: list[ModelAdapter] | None = None, mod
                 "routed_to": TaskStatus.REWORK, "circuit_open": True}
     verdict = classify(rate, total_c, lo, hi)
     store.set_verdict(task_id, verdict)
+    store.audit(task_id, "calibrated", actor_id, group_id=group, verdict=verdict, pass_rate=round(rate, 4),
+                models=[m["model"] for m in per_model], k=k)
     if verdict == Verdict.SWEET_SPOT:
         routed, reason = TaskStatus.SME_REVIEW, f"sweet spot: panel pass rate {rate:.0%}"
     elif verdict == Verdict.SATURATED_100PCT:

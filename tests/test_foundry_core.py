@@ -31,7 +31,7 @@ def _ready_task(env, assets=()):
     b = _batch()
     t = store.create_task(TaskIn.model_validate(code_task(b["id"], source_asset_ids=list(assets),
                                                           author_id=env["dana@experts.example"]["id"])))
-    store.add_criterion(t["id"], RubricCriterionIn(kind=CriterionKind.PROGRAMMATIC, spec_json={"test": "add"}))
+    store.add_criterion(t["id"], RubricCriterionIn(kind=CriterionKind.PROGRAMMATIC, spec_json={"test": "add"}, ground_truth_evidence_ref="calc.py:2"))
     return t
 
 
@@ -85,7 +85,7 @@ def test_calibrating_needs_rubric_and_clean_sources(env):
     with pytest.raises(sm.TransitionError) as e:
         store.transition(t["id"], S.CALIBRATING)
     assert e.value.code == "rubric_required"
-    store.add_criterion(t["id"], RubricCriterionIn(kind="PROGRAMMATIC"))
+    store.add_criterion(t["id"], RubricCriterionIn(kind="PROGRAMMATIC", ground_truth_evidence_ref="calc.py:2"))
     with pytest.raises(sm.TransitionError) as e:
         store.transition(t["id"], S.CALIBRATING)
     assert e.value.code == "source_blocked"

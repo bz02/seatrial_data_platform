@@ -35,7 +35,7 @@ def _ready(lo=0.15, hi=0.70):
     b = store.create_batch(ContractBatchIn(client_name="Frontier Lab", deal_type="EVAL", domain="swe",
                                            target_pass_rate_min=lo, target_pass_rate_max=hi))
     t = store.create_task(TaskIn.model_validate(code_task(b["id"])))
-    store.add_criterion(t["id"], RubricCriterionIn(kind="PROGRAMMATIC"))
+    store.add_criterion(t["id"], RubricCriterionIn(kind="PROGRAMMATIC", ground_truth_evidence_ref="calc.py:2"))
     assert run_env_sanity_check(t["id"])["passed"]
     store.transition(t["id"], TaskStatus.SYNTH_CHECK)
     return b, t

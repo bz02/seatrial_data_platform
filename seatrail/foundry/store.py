@@ -12,14 +12,35 @@ from .models import (AssignmentIn, ContractBatchIn, LeakageStatus, LedgerKind, P
 from .sandbox_runner.grader_isolation import seal, unseal
 
 
+def audit(task_id: int, kind: str, actor_id: int | None = None, **payload) -> None:
+    """Append an immutable TaskAuditEvent (the table refuses UPDATE and DELETE)."""
+    db.x("INSERT INTO task_audit_events (task_id, actor_id, kind, payload, created_at) VALUES (?,?,?,?,?)",
+         task_id, actor_id, kind, db.dumps(payload), db.now())
+
+
+def audit_events(task_id: int) -> list[dict]:
+    rows = db.q("SELECT * FROM task_audit_events WHERE task_id=? ORDER BY id", task_id)
+    for r in rows:
+        r["payload"] = db.loads(r["payload"])
+    return rows
+
+
+def pod_of(user_id: int | None) -> str:
+    if user_id is None:
+        return ""
+    r = db.q1("SELECT pod FROM expert_profiles WHERE user_id=?", user_id)
+    return r["pod"] if r else ""
+
+
 # ---------------------------------------------------------------------------
 # Batches and source assets
 # ---------------------------------------------------------------------------
 def create_batch(b: ContractBatchIn) -> dict:
     bid = db.x("INSERT INTO contract_batches (client_name, deal_type, domain, target_pass_rate_min,"
-               " target_pass_rate_max, warranty_days, price_per_accepted_task_usd, created_at)"
-               " VALUES (?,?,?,?,?,?,?,?)", b.client_name, b.deal_type, b.domain, b.target_pass_rate_min,
-               b.target_pass_rate_max, b.warranty_days, b.price_per_accepted_task_usd, db.now())
+               " target_pass_rate_max, warranty_days, price_per_accepted_task_usd, priority, quoted_cost_per_task_usd,"
+               " payment_terms_days, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)", b.client_name, b.deal_type,
+               b.domain, b.target_pass_rate_min, b.target_pass_rate_max, b.warranty_days,
+               b.price_per_accepted_task_usd, b.priority, b.quoted_cost_per_task_usd, b.payment_terms_days, db.now())
     return get_batch(bid)
 
 
@@ -74,6 +95,7 @@ def create_task(t: TaskIn) -> dict:
         tid = cur.lastrowid
         for aid in t.source_asset_ids:
             c.execute("INSERT INTO task_source_assets (task_id, asset_id) VALUES (?,?)", (tid, aid))
+    audit(tid, "created", t.author_id, batch_id=t.batch_id, archetype=t.archetype)
     return get_task(tid)
 
 
@@ -106,7 +128,8 @@ def task_sealed(tid: int) -> dict:
     return unseal(_row(tid)["sealed"])
 
 
-def update_task_spec(tid: int, env: dict | None = None, sealed: dict | None = None) -> dict:
+def update_task_spec(tid: int, env: dict | None = None, sealed: dict | None = None,
+                     actor_id: int | None = None) -> dict:
     """Edit a task's environment or ground truth. Only in DRAFT or REWORK; bumps the version so an
     old sanity check or calibration no longer counts."""
     r = _row(tid)
@@ -118,6 +141,7 @@ def update_task_spec(tid: int, env: dict | None = None, sealed: dict | None = No
     new_sealed = seal(SealedSpec.model_validate(sealed).model_dump()) if sealed is not None else r["sealed"]
     db.x("UPDATE foundry_tasks SET env=?, sealed=?, version=version+1, updated_at=? WHERE id=?",
          new_env, new_sealed, db.now(), tid)
+    audit(tid, "edited", actor_id, version=r["version"] + 1, env=env is not None, sealed=sealed is not None)
     return get_task(tid)
 
 
@@ -125,11 +149,16 @@ def batch_task_ids(batch_id: int) -> list[int]:
     return [r["id"] for r in db.q("SELECT id FROM foundry_tasks WHERE batch_id=? ORDER BY id", batch_id)]
 
 
-def add_criterion(tid: int, c: RubricCriterionIn) -> dict:
+def add_criterion(tid: int, c: RubricCriterionIn, actor_id: int | None = None) -> dict:
+    from .dispatch.rules import criterion_problems
     _row(tid)
+    problems = criterion_problems(c.kind, c.spec_json, c.ground_truth_evidence_ref)
+    if problems:
+        raise ValueError("; ".join(problems))
     cid = db.x("INSERT INTO rubric_criteria (task_id, kind, weight, spec_json, ground_truth_evidence_ref, created_at)"
                " VALUES (?,?,?,?,?,?)", tid, c.kind, c.weight, db.dumps(c.spec_json),
                c.ground_truth_evidence_ref, db.now())
+    audit(tid, "criterion_added", actor_id, criterion_id=cid, criterion_kind=c.kind)
     return next(x for x in list_criteria(tid) if x["id"] == cid)
 
 
@@ -148,11 +177,9 @@ def assign(tid: int, a: AssignmentIn) -> dict:
         raise sm.TransitionError("author and reviewer must be different people", "conflict_of_interest")
     if r["author_id"] is not None and a.reviewer_id == r["author_id"]:
         raise sm.TransitionError("the task's author cannot review it", "conflict_of_interest")
-    if a.pod:
-        clash = db.q1("SELECT 1 FROM sme_assignments WHERE author_id=? AND pod=? AND task_id=? AND active=1",
-                      a.reviewer_id, a.pod, tid)
-        if clash:
-            raise sm.TransitionError("reviewer is in the same authoring pod", "conflict_of_interest")
+    author_pod = a.pod or pod_of(r["author_id"] or a.author_id)
+    if author_pod and pod_of(a.reviewer_id) == author_pod:
+        raise sm.TransitionError("reviewer is in the same authoring pod", "conflict_of_interest")
     for uid in (a.author_id, a.reviewer_id):
         if not db.q1("SELECT 1 FROM users WHERE id=?", uid):
             raise KeyError(f"user {uid} not found")
@@ -162,6 +189,7 @@ def assign(tid: int, a: AssignmentIn) -> dict:
                         " VALUES (?,?,?,?,?)", (tid, a.author_id, a.reviewer_id, a.pod, db.now()))
         if r["author_id"] is None:
             c.execute("UPDATE foundry_tasks SET author_id=? WHERE id=?", (a.author_id, tid))
+    audit(tid, "assigned", None, author_id=a.author_id, reviewer_id=a.reviewer_id)
     return db.q1("SELECT * FROM sme_assignments WHERE id=?", cur.lastrowid)
 
 
@@ -174,6 +202,13 @@ def context(tid: int) -> sm.TaskContext:
     cal = db.q1("SELECT verdict, task_version FROM calibration_runs WHERE task_id=? ORDER BY id DESC LIMIT 1", tid)
     srcs = db.q("SELECT s.* FROM source_assets s JOIN task_source_assets t ON t.asset_id=s.id WHERE t.task_id=?", tid)
     rev = db.q1("SELECT reviewer_id FROM sme_assignments WHERE task_id=? AND active=1 ORDER BY id DESC LIMIT 1", tid)
+    from .dispatch.rules import lint_prompt, rubric_problems
+    env = db.loads(r["env"])
+    problems = lint_prompt(env.get("instructions", ""))["errors"] + rubric_problems(r["archetype"], list_criteria(tid))
+    if env.get("profile") == "profile-sheet-accounting":   # legacy task library: prompt lint only
+        problems = lint_prompt(env.get("instructions", ""))["errors"]
+    reviewer = rev["reviewer_id"] if rev else None
+    clash = bool(reviewer and pod_of(r["author_id"]) and pod_of(reviewer) == pod_of(r["author_id"]))
     return sm.TaskContext(
         status=TaskStatus(r["status"]), version=r["version"], sanity_passed_for_version=bool(sanity),
         criteria_count=db.q1("SELECT COUNT(*) n FROM rubric_criteria WHERE task_id=?", tid)["n"],
@@ -183,7 +218,8 @@ def context(tid: int) -> sm.TaskContext:
                                 bool(s["ai_training_allowed"]), s["license_type"], s["chain_of_title_doc_uri"],
                                 s["gate_status"] == "APPROVED")
                  for s in srcs],
-        author_id=r["author_id"], active_reviewer_id=rev["reviewer_id"] if rev else None)
+        author_id=r["author_id"], active_reviewer_id=reviewer, authoring_problems=problems,
+        reviewer_pod_clash=clash)
 
 
 def transition(tid: int, to: TaskStatus, actor_id: int | None = None, reason: str = "") -> dict:
@@ -194,7 +230,23 @@ def transition(tid: int, to: TaskStatus, actor_id: int | None = None, reason: st
                   " ELSE rework_reason END WHERE id=?", (to, db.now(), to, reason, tid))
         c.execute("INSERT INTO task_transitions (task_id, from_status, to_status, actor_id, reason, created_at)"
                   " VALUES (?,?,?,?,?,?)", (tid, ctx.status, to, actor_id, reason, db.now()))
+        c.execute("INSERT INTO task_audit_events (task_id, actor_id, kind, payload, created_at) VALUES (?,?,?,?,?)",
+                  (tid, actor_id, "transition", db.dumps({"from": ctx.status, "to": to, "reason": reason}), db.now()))
+    _on_transition(tid, ctx.status, TaskStatus(to), actor_id)
     return get_task(tid)
+
+
+_HOOKS: list = []
+
+
+def on_transition(fn) -> None:
+    """Register fn(task_id, from_status, to_status, actor_id); used by finance (payouts) and delivery."""
+    _HOOKS.append(fn)
+
+
+def _on_transition(tid, frm, to, actor_id) -> None:
+    for fn in _HOOKS:
+        fn(tid, frm, to, actor_id)
 
 
 def set_verdict(tid: int, verdict: Verdict) -> None:

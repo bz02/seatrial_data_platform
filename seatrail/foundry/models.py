@@ -118,6 +118,9 @@ class ContractBatchIn(_In):
     target_pass_rate_max: float = Field(0.70, ge=0, le=1)
     warranty_days: int = Field(60, ge=0)
     price_per_accepted_task_usd: float = Field(0, ge=0)
+    priority: int = 0
+    quoted_cost_per_task_usd: float = Field(0, ge=0)
+    payment_terms_days: int = Field(30, ge=0, le=180)
 
     @model_validator(mode="after")
     def _band(self):
@@ -184,6 +187,30 @@ class RubricCriterionIn(_In):
     weight: float = Field(1.0, ge=0)
     spec_json: dict[str, Any] = Field(default_factory=dict)
     ground_truth_evidence_ref: str = ""
+
+
+class DefectTag(StrEnum):
+    LEAKAGE = "LEAKAGE"
+    BAD_VERIFIER = "BAD_VERIFIER"
+    AMBIGUOUS_PROMPT = "AMBIGUOUS_PROMPT"
+    TOO_EASY = "TOO_EASY"
+    UNSOLVABLE = "UNSOLVABLE"
+
+
+class ExpertProfileIn(_In):
+    domain_tags: list[str] = Field(default_factory=list)
+    hourly_rate_usd: float = Field(0, ge=0)
+    per_task_rate_usd: float = Field(0, ge=0)
+    capacity_cap: int = Field(3, ge=0, le=100)
+    pod: str = ""
+    active: bool = True
+
+
+class QaDecisionIn(_In):
+    decision: str = Field(pattern="^(APPROVE|RETURN)$")
+    checklist: dict[str, bool] = Field(default_factory=dict)   # criterion_id -> passes
+    defect_tags: list[DefectTag] = Field(default_factory=list)
+    notes: str = ""
 
 
 class TransitionIn(_In):

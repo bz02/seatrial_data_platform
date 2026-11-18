@@ -9,8 +9,8 @@ from .. import config
 from . import jobs, store
 from .calibrator import calibrate, loss_analyzer
 from .calibrator.adapters import default_panel, get_adapter
-from .models import (AssignmentIn, CalibrationRunIn, ContractBatchIn, LeakageStatus, PiiScanStatus,
-                     RubricCriterionIn, SourceAssetIn, TaskIn, TransitionIn)
+from .models import (AssignmentIn, CalibrationRunIn, ContractBatchIn, ExpertProfileIn, LeakageStatus, PiiScanStatus,
+                     QaDecisionIn, RubricCriterionIn, SourceAssetIn, TaskIn, TransitionIn)
 from .sandbox_runner.runner import run_env_sanity_check
 from .state_machine import TransitionError
 
@@ -82,7 +82,7 @@ def get_task(tid: int, user=ADMIN):
 @router.patch("/tasks/{tid}")
 def edit_task(tid: int, body: dict = Body(...), user=ADMIN):
     try:
-        return store.update_task_spec(tid, body.get("env"), body.get("sealed"))
+        return store.update_task_spec(tid, body.get("env"), body.get("sealed"), user["id"])
     except TransitionError as e:
         conflict(e)
 
@@ -97,7 +97,7 @@ def transition(tid: int, body: TransitionIn, user=ADMIN):
 
 @router.post("/tasks/{tid}/criteria")
 def add_criterion(tid: int, body: RubricCriterionIn, user=ADMIN):
-    return store.add_criterion(tid, body)
+    return store.add_criterion(tid, body, user["id"])
 
 
 @router.post("/tasks/{tid}/assignments")
@@ -202,3 +202,200 @@ def ingestion_resolve(alert_id: int, body: dict = Body(...), user=ADMIN):
 def ingestion_waive(alert_id: int, body: dict = Body(...), user=ADMIN):
     from .ingestion import compliance_gate
     return compliance_gate.waive(alert_id, user["id"], body.get("reason", ""))
+
+
+# ---------------------------------------------------------------------------
+# P4 dispatch, workbench and QA (experts with a profile, and admins)
+# ---------------------------------------------------------------------------
+def expert_dep():
+    from ..app import current_user
+
+    def dep(user=Depends(current_user)):
+        if user["role"] not in ("expert", "admin"):
+            raise HTTPException(403, "requires role: expert or admin")
+        return user
+    return dep
+
+
+EXPERT = Depends(expert_dep())
+
+
+def _task_access(tid: int, user: dict, need: str = "view") -> dict:
+    from .. import db
+    t = store.get_task(tid)
+    rev = db.q1("SELECT reviewer_id FROM sme_assignments WHERE task_id=? AND active=1 ORDER BY id DESC LIMIT 1", tid)
+    is_author = t["author_id"] == user["id"]
+    is_reviewer = bool(rev and rev["reviewer_id"] == user["id"])
+    if user["role"] == "admin":
+        return t
+    if need == "author" and not is_author:
+        raise HTTPException(403, "only the task's author can do this")
+    if need == "view" and not (is_author or is_reviewer):
+        raise HTTPException(403, "you are not the author or the assigned reviewer of this task")
+    return t
+
+
+@router.put("/experts/{uid}/profile")
+def put_profile(uid: int, body: ExpertProfileIn, user=ADMIN):
+    from .dispatch import service as dispatch
+    return dispatch.upsert_profile(uid, body)
+
+
+@router.post("/dispatch/auto")
+def auto_dispatch(user=ADMIN):
+    from .dispatch import service as dispatch
+    return dispatch.auto_dispatch_reviews()
+
+
+@router.get("/tasks/{tid}/audit")
+def task_audit(tid: int, user=ADMIN):
+    return store.audit_events(tid)
+
+
+@router.get("/workbench/queue")
+def wb_queue(user=EXPERT):
+    from .dispatch import service as dispatch
+    return dispatch.queue(user["id"])
+
+
+@router.post("/workbench/seeds/{aid}/claim")
+def wb_claim_seed(aid: int, user=EXPERT):
+    from .dispatch import service as dispatch
+    try:
+        return dispatch.claim_seed(user["id"], aid)
+    except TransitionError as e:
+        conflict(e)
+
+
+def _seed_access(aid: int, user: dict):
+    from .. import db
+    c = db.q1("SELECT user_id FROM seed_claims WHERE asset_id=?", aid)
+    if user["role"] != "admin" and (not c or c["user_id"] != user["id"]):
+        raise HTTPException(403, "claim this seed first")
+
+
+@router.get("/workbench/seeds/{aid}/files")
+def wb_seed_files(aid: int, path: str | None = None, user=EXPERT):
+    import base64
+    from .ingestion.service import clean_dir
+    _seed_access(aid, user)
+    root = clean_dir(aid).resolve()
+    if path is None:
+        return [str(p.relative_to(root)) for p in sorted(root.rglob("*")) if p.is_file()]
+    p = (root / path).resolve()
+    if root not in p.parents or not p.is_file():
+        raise HTTPException(404, "no such file")
+    data = p.read_bytes()
+    try:
+        return {"path": path, "text": data.decode("utf-8")}
+    except UnicodeDecodeError:
+        return {"path": path, "base64": base64.b64encode(data).decode()}
+
+
+@router.post("/workbench/tasks")
+def wb_create_task(body: TaskIn, user=EXPERT):
+    from .. import db
+    from .dispatch import service as dispatch
+    body = body.model_copy(update={"author_id": user["id"]})
+    for aid in body.source_asset_ids:
+        c = db.q1("SELECT user_id FROM seed_claims WHERE asset_id=?", aid)
+        if user["role"] != "admin" and (not c or c["user_id"] != user["id"]):
+            raise HTTPException(403, f"seed {aid} is not claimed by you")
+    t = store.create_task(body)
+    for aid in body.source_asset_ids:
+        dispatch.link_seed(aid, t["id"])
+    return t
+
+
+@router.get("/workbench/tasks/{tid}")
+def wb_task(tid: int, user=EXPERT):
+    from .. import db
+    from .dispatch import service as dispatch
+    t = _task_access(tid, user)
+    t["sealed"] = store.task_sealed(tid)  # the author wrote it; the reviewer must check the verifier
+    t["authoring"] = dispatch.authoring_check(tid)
+    last = db.q1("SELECT group_id FROM calibration_runs WHERE task_id=? ORDER BY id DESC LIMIT 1", tid)
+    t["rollouts"] = db.q("SELECT r.id, c.model_name, r.k_index, r.score, r.passed, r.steps, r.stop_reason,"
+                         " r.failure_bucket FROM rollouts r JOIN calibration_runs c ON c.id=r.run_id WHERE c.task_id=?"
+                         " AND c.group_id=? ORDER BY c.id, r.k_index", tid, last["group_id"]) if last else []
+    t["qa_reviews"] = db.q("SELECT * FROM qa_reviews WHERE task_id=? ORDER BY id", tid)
+    return t
+
+
+@router.patch("/workbench/tasks/{tid}")
+def wb_edit(tid: int, body: dict = Body(...), user=EXPERT):
+    _task_access(tid, user, "author")
+    try:
+        return store.update_task_spec(tid, body.get("env"), body.get("sealed"), user["id"])
+    except TransitionError as e:
+        conflict(e)
+
+
+@router.post("/workbench/tasks/{tid}/criteria")
+def wb_criterion(tid: int, body: RubricCriterionIn, user=EXPERT):
+    t = _task_access(tid, user, "author")
+    if t["status"] not in ("DRAFT", "REWORK"):
+        raise HTTPException(409, {"code": "not_editable", "message": f"task is {t['status']}"})
+    return store.add_criterion(tid, body, user["id"])
+
+
+@router.post("/workbench/tasks/{tid}/submit")
+def wb_submit(tid: int, user=EXPERT):
+    t = _task_access(tid, user, "author")
+    if t["status"] not in ("DRAFT", "REWORK"):
+        raise HTTPException(409, {"code": "not_editable", "message": f"task is {t['status']}"})
+    sanity = run_env_sanity_check(tid)
+    if not sanity["passed"]:
+        return {"submitted": False, "sanity": sanity}
+    try:
+        return {"submitted": True, "sanity": sanity,
+                "task": store.transition(tid, "SYNTH_CHECK", user["id"], "submitted by author")}
+    except TransitionError as e:
+        conflict(e)
+
+
+@router.post("/workbench/tasks/{tid}/claim-review")
+def wb_claim_review(tid: int, user=EXPERT):
+    from .dispatch import service as dispatch
+    try:
+        return dispatch.claim_review(user["id"], tid)
+    except TransitionError as e:
+        conflict(e)
+
+
+@router.post("/workbench/tasks/{tid}/qa")
+def wb_qa(tid: int, body: QaDecisionIn, user=EXPERT):
+    from .dispatch import service as dispatch
+    try:
+        return dispatch.qa_decide(tid, user["id"], body)
+    except TransitionError as e:
+        conflict(e)
+
+
+@router.get("/workbench/rollouts/{rid}")
+def wb_rollout(rid: int, user=EXPERT):
+    import json as _json
+    from .. import db
+    r = db.q1("SELECT r.*, c.task_id, c.model_name FROM rollouts r JOIN calibration_runs c ON c.id=r.run_id"
+              " WHERE r.id=?", rid)
+    if not r:
+        raise HTTPException(404, "rollout not found")
+    _task_access(r["task_id"], user)
+    try:
+        lines = [_json.loads(x) for x in open(r["trace_uri"]).read().splitlines()]
+    except OSError:
+        lines = []
+    return {"rollout": {k: r[k] for k in ("id", "task_id", "model_name", "score", "passed", "steps", "stop_reason",
+                                          "failure_bucket")}, "summary": lines[0] if lines else {},
+            "turns": lines[1:]}
+
+
+@router.post("/workbench/lint")
+def wb_lint(body: dict = Body(...), user=EXPERT):
+    from .dispatch.rules import criterion_problems, lint_prompt
+    out = {"prompt": lint_prompt(body.get("instructions", ""))}
+    if "criterion" in body:
+        c = body["criterion"]
+        out["criterion"] = criterion_problems(c.get("kind", ""), c.get("spec_json") or {},
+                                              c.get("ground_truth_evidence_ref", ""))
+    return out

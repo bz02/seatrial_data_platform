@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Expert Workbench</title>
+<link rel="stylesheet" href="/static/app.css">
+<style>
+.wb { display:grid; grid-template-columns: 300px minmax(0,1fr); gap:16px; align-items:start; }
+.split { display:grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap:16px; }
+@media (max-width: 1100px) { .wb, .split { grid-template-columns: 1fr; } }
+textarea { width:100%; min-height:160px; font-family: ui-monospace, monospace; font-size:13px; }
+pre.file { max-height:420px; overflow:auto; background:var(--bg2, #f6f7f9); padding:8px; font-size:12px; white-space:pre-wrap; }
+.lint-err { color:#b42318; } .lint-warn { color:#b54708; }
+.turn { border-left:3px solid #d0d5dd; padding:4px 8px; margin:6px 0; font-size:12px; }
+.turn.assistant { border-color:#2e90fa; } .turn.tool_result { border-color:#98a2b3; } .turn.error { border-color:#f04438; }
+.q h3 { margin-top:14px; }
+</style>
+</head><body>
+<main>
+  <h1>Expert workbench</h1>
+  <p class="muted" id="intro">Claim a seed, author a task, or review someone else's. You only see work in your verified domains.</p>
+  <div class="wb">
+    <div class="panel q" id="queue"><p class="muted">Loading…</p></div>
+    <div class="panel" id="detail"><p class="muted">Pick a task, seed or review from the queue.</p></div>
+  </div>
+</main>
+<script src="/static/common.js"></script>
+<script>
+const $ = (id) => document.getElementById(id);
+const V1 = "/api/v1/workbench";
+const DEFECTS = ["LEAKAGE", "BAD_VERIFIER", "AMBIGUOUS_PROMPT", "TOO_EASY", "UNSOLVABLE"];
+const KINDS = ["PROGRAMMATIC", "ATOMIC_JUDGE", "DECOY_NEGATIVE", "EXCLUDED_BOUNDARY"];
+const ARCHETYPES = ["BUG_FIX", "MULTI_HOP_FLAW", "MASK_RECONSTRUCT", "FEATURE_TREE_REBUILD", "E2E_ENV"];
+let Q = null;
+
+function debounce(fn, ms) { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; }
+
+function lintHTML(l) {
+  if (!l) return "";
+  const e = (l.errors || []).map((x) => `<li class="lint-err">${ST.esc(x)}</li>`).join("");
+  const w = (l.warnings || []).map((x) => `<li class="lint-warn">${ST.esc(x)}</li>`).join("");
+  return e || w ? `<ul class="tight small">${e}${w}</ul>` : `<p class="small muted">No prompt problems found (${l.words} words).</p>`;
+}
+
+async function loadQueue() {
+  try { Q = await ST.api(V1 + "/queue"); }
+  catch (e) { $("queue").innerHTML = `<div class="notice warn">${ST.esc(e.message)}</div>`; return; }
+  const p = Q.profile;
+  $("queue").innerHTML = `
+    <p class="small">Domains: ${p.domain_tags.map((t) => `<span class="tag gray">${ST.esc(t)}</span>`).join(" ") || "none"}
+      · load ${p.active_load}/${p.capacity_cap}${p.pod ? " · pod " + ST.esc(p.pod) : ""}
+      ${p.qa_acceptance_rate != null ? " · QA acceptance " + ST.pct(p.qa_acceptance_rate) : ""}</p>
+    <h3>My tasks</h3>${Q.my_tasks.map((t) => `<div class="row click" data-task="${t.id}"><span>#${t.id} ${ST.esc(t.title)}</span>
+      <div class="spacer"></div><span class="tag ${t.status === "REWORK" ? "warn" : "gray"}">${t.status}</span></div>`).join("") || '<p class="small muted">None.</p>'}
+    <h3>Reviews</h3>${Q.reviews.map((t) => `<div class="row click" data-review="${t.id}"><span>#${t.id} ${ST.esc(t.title)}
+      <span class="small muted">${ST.esc(t.client_name)}${t.priority ? " · P" + t.priority : ""}</span></span><div class="spacer"></div>
+      ${t.reviewer_id === ST.me.id ? '<span class="tag ok">mine</span>' : '<span class="tag gray">open</span>'}</div>`).join("") || '<p class="small muted">None.</p>'}
+    <h3>Seeds</h3>${Q.seeds.map((s) => `<div class="row"><span class="small">#${s.id} ${ST.esc(s.source_type)} · ${ST.esc(s.domain_tag)}</span>
+      <div class="spacer"></div><button data-seed="${s.id}">Claim</button></div>`).join("") || '<p class="small muted">None.</p>'}`;
+  $("queue").querySelectorAll("[data-task]").forEach((el) => el.onclick = () => openTask(el.dataset.task));
+  $("queue").querySelectorAll("[data-review]").forEach((el) => el.onclick = async () => {
+    const t = Q.reviews.find((x) => String(x.id) === el.dataset.review);
+    if (t.reviewer_id !== ST.me.id) {
+      try { await ST.api(`${V1}/tasks/${t.id}/claim-review`, { method: "POST" }); } catch (e) { return ST.toast(e.message); }
+    }
+    openTask(t.id);
+  });
+  $("queue").querySelectorAll("[data-seed]").forEach((el) => el.onclick = async () => {
+    try { await ST.api(`${V1}/seeds/${el.dataset.seed}/claim`, { method: "POST" }); } catch (e) { return ST.toast(e.message); }
+    openSeed(Number(el.dataset.seed));
+  });
+}
+
+async function openSeed(aid) {
+  const files = await ST.api(`${V1}/seeds/${aid}/files`);
+  $("detail").innerHTML = `<h2>New task from seed #${aid}</h2>
+    <div class="split"><div><h3>Files</h3>${files.map((f) => `<div class="click small" data-f="${ST.esc(f)}">${ST.esc(f)}</div>`).join("")}
+      <pre class="file" id="fview"></pre></div>
+    <div><label>Batch id <input id="nb" type="number"></label><label>Title <input id="nt"></label>
+      <label>Domain <input id="nd" value="${ST.esc(Q.profile.domain_tags[0] || "")}"></label>
+      <label>Archetype <select id="na">${ARCHETYPES.map((a) => `<option>${a}</option>`).join("")}</select></label>
+      <label>Prompt</label><textarea id="ni" placeholder="Write it the way a real client would ask."></textarea><div id="nlint"></div>
+      <button class="primary" id="ncreate">Create draft</button></div></div>`;
+  const text = {};
+  $("detail").querySelectorAll("[data-f]").forEach((el) => el.onclick = async () => {
+    const r = await ST.api(`${V1}/seeds/${aid}/files?path=` + encodeURIComponent(el.dataset.f));
+    $("fview").textContent = r.text ?? "(binary file)";
+  });
+  for (const f of files) {
+    const r = await ST.api(`${V1}/seeds/${aid}/files?path=` + encodeURIComponent(f));
+    if (r.text != null) text[f] = r.text;
+  }
+  const lint = debounce(async () => $("nlint").innerHTML = lintHTML((await ST.api(V1 + "/lint", { method: "POST", body: { instructions: $("ni").value } })).prompt), 300);
+  $("ni").oninput = lint;
+  $("ncreate").onclick = async () => {
+    try {
+      const t = await ST.api(V1 + "/tasks", { method: "POST", body: {
+        batch_id: Number($("nb").value), domain: $("nd").value, archetype: $("na").value, title: $("nt").value,
+        source_asset_ids: [aid], env: { profile: "profile-code-swe", instructions: $("ni").value, workspace: text },
+        sealed: { grader: { type: "pytest", tests: {} } } } });
+      await loadQueue(); openTask(t.id);
+    } catch (e) { ST.toast(e.message); }
+  };
+}
+
+async function openTask(id) {
+  const t = await ST.api(`${V1}/tasks/${id}`);
+  const isAuthor = t.author_id === ST.me.id, editable = isAuthor && ["DRAFT", "REWORK"].includes(t.status);
+  const reviewing = t.status === "SME_REVIEW" && !isAuthor;
+  const ws = t.env.workspace || {};
+  $("detail").innerHTML = `
+    <div class="row"><h2 style="margin:0">#${t.id} ${ST.esc(t.title)}</h2><span class="tag gray">${t.status}</span>
+      ${t.verdict ? `<span class="tag gray">${ST.label(t.verdict)}</span>` : ""}<div class="spacer"></div><span class="small muted">v${t.version}</span></div>
+    ${t.rework_reason ? `<div class="notice warn small">${ST.esc(t.rework_reason)}</div>` : ""}
+    <div class="split">
+      <div>
+        <h3>Workspace</h3>${Object.keys(ws).map((f) => `<div class="click small" data-f="${ST.esc(f)}">${ST.esc(f)}</div>`).join("") || '<p class="small muted">Empty.</p>'}
+        <pre class="file" id="fview"></pre>
+        <h3>Latest calibration rollouts</h3>
+        ${t.rollouts.length ? `<table>${t.rollouts.map((r) => `<tr class="click" data-r="${r.id}"><td>${ST.esc(r.model_name)} #${r.k_index}</td>
+          <td>${r.passed ? '<span class="tag ok">pass</span>' : '<span class="tag bad">fail</span>'}</td><td class="small">${ST.esc(r.failure_bucket || r.stop_reason)}</td></tr>`).join("")}</table>` : '<p class="small muted">Not calibrated yet.</p>'}
+        <div id="replay"></div>
+      </div>
+      <div>
+        <h3>Prompt</h3><textarea id="instr" ${editable ? "" : "readonly"}>${ST.esc(t.env.instructions || "")}</textarea>
+        <div id="plint">${lintHTML(t.authoring.lint)}</div>
+        ${editable ? '<button id="save">Save prompt</button>' : ""}
+        <h3>Rubric</h3>
+        <table>${t.criteria.map((c) => `<tr><td class="small">${ST.esc(c.criterion_id)}</td><td><span class="tag gray">${c.kind}</span></td>
+          <td class="small">${ST.esc(JSON.stringify(c.spec_json))}<div class="muted">${ST.esc(c.ground_truth_evidence_ref)}</div></td></tr>`).join("") || '<tr><td class="muted">No criteria yet.</td></tr>'}</table>
+        ${t.authoring.rubric_problems.length ? `<ul class="tight small">${t.authoring.rubric_problems.map((x) => `<li class="lint-err">${ST.esc(x)}</li>`).join("")}</ul>` : ""}
+        ${editable ? `<div class="row"><select id="ck">${KINDS.map((k) => `<option>${k}</option>`).join("")}</select>
+          <input id="cref" placeholder="evidence, e.g. calc.py:2"></div>
+          <input id="cspec" placeholder='{"question": "Does calc.add(2,3) return 5?"}' style="width:100%">
+          <div id="clint" class="small"></div><button id="cadd">Add criterion</button>
+          <div class="row" style="margin-top:14px"><div class="spacer"></div><button class="primary" id="submit">Run sanity check and submit</button></div>
+          <div id="subout"></div>` : ""}
+        ${reviewing ? `<h3>QA review</h3>
+          <p class="small muted">Approve only if every criterion checks out. Grader config:</p>
+          <pre class="file">${ST.esc(JSON.stringify(t.sealed.grader, null, 2))}</pre>
+          ${t.criteria.map((c) => `<label class="small"><input type="checkbox" class="qc" value="${ST.esc(c.criterion_id)}"> ${ST.esc(c.criterion_id)} passes</label>`).join("<br>")}
+          <p class="small">${DEFECTS.map((d) => `<label><input type="checkbox" class="qd" value="${d}"> ${ST.label(d)}</label>`).join(" ")}</p>
+          <textarea id="qn" style="min-height:70px" placeholder="Fix notes for the author"></textarea>
+          <div class="row"><div class="spacer"></div><button class="danger" id="qret">Return for rework</button><button class="primary" id="qok">Approve</button></div>` : ""}
+        ${t.qa_reviews.length ? `<h3>QA history</h3><table>${t.qa_reviews.map((r) => `<tr><td>v${r.task_version}</td><td>${r.decision}</td><td class="small">${ST.esc(r.notes)}</td></tr>`).join("")}</table>` : ""}
+      </div>
+    </div>`;
+  $("detail").querySelectorAll("[data-f]").forEach((el) => el.onclick = () => {
+    const c = ws[el.dataset.f]; $("fview").textContent = c.startsWith("base64:") ? "(binary file)" : c; });
+  $("detail").querySelectorAll("[data-r]").forEach((el) => el.onclick = () => replay(el.dataset.r));
+  if (editable) {
+    $("instr").oninput = debounce(async () => $("plint").innerHTML = lintHTML((await ST.api(V1 + "/lint", { method: "POST", body: { instructions: $("instr").value } })).prompt), 300);
+    $("save").onclick = async () => {
+      try { await ST.api(`${V1}/tasks/${id}`, { method: "PATCH", body: { env: Object.assign({}, t.env, { instructions: $("instr").value }) } }); ST.toast("Saved"); openTask(id); }
+      catch (e) { ST.toast(e.message); }
+    };
+    const spec = () => { try { return JSON.parse($("cspec").value || "{}"); } catch { return null; } };
+    const clint = debounce(async () => {
+      const s = spec(); if (s === null) { $("clint").innerHTML = '<span class="lint-err">spec is not valid JSON</span>'; return; }
+      const r = await ST.api(V1 + "/lint", { method: "POST", body: { criterion: { kind: $("ck").value, spec_json: s, ground_truth_evidence_ref: $("cref").value } } });
+      $("clint").innerHTML = r.criterion.map((x) => `<div class="lint-err">${ST.esc(x)}</div>`).join("") || '<span class="muted">Criterion looks atomic.</span>';
+    }, 300);
+    ["ck", "cref", "cspec"].forEach((k) => $(k).oninput = clint);
+    $("cadd").onclick = async () => {
+      try { await ST.api(`${V1}/tasks/${id}/criteria`, { method: "POST", body: { kind: $("ck").value, spec_json: spec() || {}, ground_truth_evidence_ref: $("cref").value } }); openTask(id); }
+      catch (e) { ST.toast(e.message); }
+    };
+    $("submit").onclick = async () => {
+      $("subout").innerHTML = '<p class="small muted">Running golden and empty submissions…</p>';
+      try {
+        const r = await ST.api(`${V1}/tasks/${id}/submit`, { method: "POST" });
+        if (r.submitted) { ST.toast("Submitted"); loadQueue(); openTask(id); }
+        else $("subout").innerHTML = `<div class="notice warn small">${r.sanity.problems.map(ST.esc).join("<br>")}</div>`;
+      } catch (e) { $("subout").innerHTML = `<div class="notice warn small">${ST.esc(e.message)}</div>`; }
+    };
+  }
+  if (reviewing) {
+    const decide = async (decision) => {
+      const checklist = {}; document.querySelectorAll(".qc").forEach((c) => checklist[c.value] = c.checked);
+      const defect_tags = [...document.querySelectorAll(".qd:checked")].map((c) => c.value);
+      try { await ST.api(`${V1}/tasks/${id}/qa`, { method: "POST", body: { decision, checklist, defect_tags, notes: $("qn").value } });
+        ST.toast(decision === "APPROVE" ? "Approved" : "Returned to author"); loadQueue(); openTask(id); }
+      catch (e) { ST.toast(e.message); }
+    };
+    $("qok").onclick = () => decide("APPROVE");
+    $("qret").onclick = () => decide("RETURN");
+  }
+}
+
+async function replay(rid) {
+  const r = await ST.api(`${V1}/rollouts/${rid}`);
+  $("replay").innerHTML = `<h3>Replay: ${ST.esc(r.rollout.model_name)} · score ${ST.num(r.rollout.score)}</h3>` + r.turns.map((x) => {
+    if (x.type === "assistant") return `<div class="turn assistant">${ST.esc(x.text || "")}${(x.tool_calls || []).map((c) => `<div><b>${ST.esc(c.name)}</b> ${ST.esc(JSON.stringify(c.args).slice(0, 300))}</div>`).join("")}</div>`;
+    if (x.type === "tool_result") return `<div class="turn tool_result ${x.is_error ? "lint-err" : ""}">${ST.esc(x.name)} → ${ST.esc((x.output || "").slice(0, 600))}</div>`;
+    return `<div class="turn error">${ST.esc(JSON.stringify(x))}</div>`;
+  }).join("");
+}
+
+ST.topbar("/workbench", ["expert", "admin"]).then(loadQueue);
+</script>
+</body></html>

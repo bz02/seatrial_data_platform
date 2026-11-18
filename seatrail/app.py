@@ -781,7 +781,7 @@ def cap_stop(sid: int, user=Depends(capture_user)):
 # Web apps
 # ---------------------------------------------------------------------------
 PAGES = {"": "landing.html", "app": "app.html", "login": "login.html", "expert": "expert.html", "review": "review.html", "market": "market.html",
-         "enterprise": "enterprise.html", "demo-erp": "demo-erp.html"}
+         "enterprise": "enterprise.html", "demo-erp": "demo-erp.html", "workbench": "workbench.html"}
 
 
 def _page(name):

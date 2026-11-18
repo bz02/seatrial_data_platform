@@ -15,6 +15,9 @@ CREATE TABLE IF NOT EXISTS contract_batches (
   target_pass_rate_max REAL NOT NULL DEFAULT 0.70,
   warranty_days INTEGER NOT NULL DEFAULT 60,
   price_per_accepted_task_usd REAL NOT NULL DEFAULT 0,
+  priority INTEGER NOT NULL DEFAULT 0,          -- client-urgent batches dispatch first
+  quoted_cost_per_task_usd REAL NOT NULL DEFAULT 0,
+  payment_terms_days INTEGER NOT NULL DEFAULT 30,
   created_at REAL NOT NULL,
   CHECK (target_pass_rate_min <= target_pass_rate_max)
 );
@@ -187,4 +190,50 @@ CREATE TABLE IF NOT EXISTS jobs (
   created_at REAL NOT NULL,
   finished_at REAL
 );
+
+-- P4: who can author / review what, at what rate and capacity.
+CREATE TABLE IF NOT EXISTS expert_profiles (
+  user_id INTEGER PRIMARY KEY REFERENCES users(id),
+  domain_tags TEXT NOT NULL DEFAULT '[]',     -- e.g. ["MECHE_CAD","CORPORATE_MNA","K8S_SRE"]
+  hourly_rate_usd REAL NOT NULL DEFAULT 0,
+  per_task_rate_usd REAL NOT NULL DEFAULT 0,
+  capacity_cap INTEGER NOT NULL DEFAULT 3,
+  pod TEXT NOT NULL DEFAULT '',
+  active INTEGER NOT NULL DEFAULT 1,
+  created_at REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS seed_claims (
+  asset_id INTEGER PRIMARY KEY REFERENCES source_assets(id),
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  task_id INTEGER REFERENCES foundry_tasks(id),
+  created_at REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS qa_reviews (
+  id INTEGER PRIMARY KEY,
+  task_id INTEGER NOT NULL REFERENCES foundry_tasks(id),
+  task_version INTEGER NOT NULL,
+  reviewer_id INTEGER NOT NULL REFERENCES users(id),
+  author_id INTEGER REFERENCES users(id),
+  decision TEXT NOT NULL CHECK (decision IN ('APPROVE','RETURN')),
+  checklist TEXT NOT NULL DEFAULT '{}',
+  defect_tags TEXT NOT NULL DEFAULT '[]',
+  notes TEXT NOT NULL DEFAULT '',
+  created_at REAL NOT NULL
+);
+
+-- Every edit, transition, calibration and QA decision. Append-only: triggers refuse changes.
+CREATE TABLE IF NOT EXISTS task_audit_events (
+  id INTEGER PRIMARY KEY,
+  task_id INTEGER NOT NULL,
+  actor_id INTEGER,
+  kind TEXT NOT NULL,
+  payload TEXT NOT NULL DEFAULT '{}',
+  created_at REAL NOT NULL
+);
+CREATE TRIGGER IF NOT EXISTS task_audit_no_update BEFORE UPDATE ON task_audit_events
+BEGIN SELECT RAISE(ABORT, 'task audit events are immutable'); END;
+CREATE TRIGGER IF NOT EXISTS task_audit_no_delete BEFORE DELETE ON task_audit_events
+BEGIN SELECT RAISE(ABORT, 'task audit events are immutable'); END;
 """

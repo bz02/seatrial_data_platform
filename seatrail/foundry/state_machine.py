@@ -65,6 +65,8 @@ class TaskContext:
     sources: list[SourceState] = field(default_factory=list)
     author_id: int | None = None
     active_reviewer_id: int | None = None
+    authoring_problems: list[str] = field(default_factory=list)   # prompt lint errors + rubric rule breaks
+    reviewer_pod_clash: bool = False
 
 
 def source_blockers(sources: list[SourceState]) -> list[str]:
@@ -104,10 +106,14 @@ def check(ctx: TaskContext, to: TaskStatus, actor_id: int | None = None) -> None
                               "sanity_check_required")
     if frm == S.REWORK and to == S.SYNTH_CHECK and not ctx.sanity_passed_for_version:
         raise TransitionError("the reworked version has not passed the sanity check", "sanity_check_required")
+    if to == S.SYNTH_CHECK and ctx.authoring_problems:
+        raise TransitionError("; ".join(ctx.authoring_problems), "authoring_rules")
 
     if to == S.CALIBRATING:
         if ctx.criteria_count == 0:
             raise TransitionError("add at least one rubric criterion before calibrating", "rubric_required")
+        if ctx.authoring_problems:
+            raise TransitionError("; ".join(ctx.authoring_problems), "authoring_rules")
         blockers = source_blockers(ctx.sources)
         if blockers:
             raise TransitionError("; ".join(blockers), "source_blocked")
@@ -122,6 +128,8 @@ def check(ctx: TaskContext, to: TaskStatus, actor_id: int | None = None) -> None
             raise TransitionError("assign an SME reviewer first", "reviewer_required")
         if ctx.author_id is not None and ctx.active_reviewer_id == ctx.author_id:
             raise TransitionError("the author cannot approve their own task", "conflict_of_interest")
+        if ctx.reviewer_pod_clash:
+            raise TransitionError("the reviewer is in the author's pod", "conflict_of_interest")
         if actor_id is not None and ctx.author_id is not None and actor_id == ctx.author_id:
             raise TransitionError("the author cannot approve their own task", "conflict_of_interest")
 

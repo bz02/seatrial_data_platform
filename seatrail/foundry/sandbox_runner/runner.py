@@ -251,6 +251,8 @@ def run_env_sanity_check(task_id: int) -> dict:
     db.x("INSERT INTO sanity_checks (task_id, task_version, golden_score, empty_score, passed, detail, created_at)"
          " VALUES (?,?,?,?,?,?,?)", task_id, row["version"], golden.overall_score, empty.overall_score,
          int(passed), db.dumps(detail), db.now())
+    store.audit(task_id, "sanity_check", None, version=row["version"], passed=passed,
+                golden=golden.overall_score, empty=empty.overall_score)
     problems = []
     if golden.overall_score < 1.0 or not golden.passed:
         problems.append(f"golden solution scored {golden.overall_score} ({golden.failure_mode})")
