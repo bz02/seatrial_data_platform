@@ -31,6 +31,32 @@ CREATE TABLE IF NOT EXISTS source_assets (
     CHECK (pii_scan_status IN ('PENDING','CLEAN','REDACTED','BLOCKED')),
   outcome_leakage_status TEXT NOT NULL DEFAULT 'PENDING'
     CHECK (outcome_leakage_status IN ('PENDING','CLEAN','FLAGGED')),
+  gate_status TEXT NOT NULL DEFAULT 'PENDING' CHECK (gate_status IN ('PENDING','APPROVED')),
+  domain_tag TEXT NOT NULL DEFAULT '',
+  acquisition_cost_usd REAL NOT NULL DEFAULT 0,
+  storage_uri TEXT NOT NULL DEFAULT '',   -- sources/{sha256}/ (raw/, clean/, manifest.json)
+  created_at REAL NOT NULL
+);
+
+-- Findings from ingestion: crawler junk, outcome leakage, PII, secrets.
+CREATE TABLE IF NOT EXISTS ingestion_alerts (
+  id INTEGER PRIMARY KEY,
+  asset_id INTEGER NOT NULL REFERENCES source_assets(id),
+  kind TEXT NOT NULL CHECK (kind IN ('CRAWLER_ARTIFACT','LEAKAGE','PII','SECRET','UNSCANNABLE','FUTURE_COMMIT')),
+  path TEXT NOT NULL DEFAULT '',
+  detail TEXT NOT NULL DEFAULT '{}',
+  status TEXT NOT NULL CHECK (status IN ('OPEN','QUARANTINED','REDACTED','STRIPPED','RESOLVED','WAIVED')),
+  created_at REAL NOT NULL,
+  resolved_at REAL
+);
+
+-- An admin's documented decision to let a borderline file through.
+CREATE TABLE IF NOT EXISTS compliance_waivers (
+  id INTEGER PRIMARY KEY,
+  asset_id INTEGER NOT NULL REFERENCES source_assets(id),
+  alert_id INTEGER REFERENCES ingestion_alerts(id),
+  admin_id INTEGER NOT NULL REFERENCES users(id),
+  reason TEXT NOT NULL CHECK (length(trim(reason)) >= 10),
   created_at REAL NOT NULL
 );
 

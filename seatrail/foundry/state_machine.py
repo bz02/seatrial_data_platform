@@ -51,6 +51,7 @@ class SourceState:
     ai_training_allowed: bool
     license_type: str
     chain_of_title_doc_uri: str
+    gate_approved: bool = False
 
 
 @dataclass
@@ -87,6 +88,8 @@ def compliance_blockers(sources: list[SourceState]) -> list[str]:
             out.append(f"source {s.asset_id} is not licensed for AI training")
         if not s.license_type or not s.chain_of_title_doc_uri:
             out.append(f"source {s.asset_id} has no license / chain-of-title document")
+        if not s.gate_approved:
+            out.append(f"source {s.asset_id} has not passed the compliance gate")
     return out
 
 

@@ -20,9 +20,11 @@ def _batch(**kw):
 
 
 def _clean_asset():
-    return store.create_source_asset(SourceAssetIn(
+    from seatrail.foundry.ingestion import compliance_gate
+    a = store.create_source_asset(SourceAssetIn(
         source_type="REPO", raw_uri="s3://src/calc", license_type="MIT", ai_training_allowed=True,
         chain_of_title_doc_uri="s3://legal/calc-cot.pdf", pii_scan_status="CLEAN", outcome_leakage_status="CLEAN"))
+    return compliance_gate.approve(a["id"])
 
 
 def _ready_task(env, assets=()):

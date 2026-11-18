@@ -34,10 +34,10 @@ def get_batch(bid: int) -> dict:
 
 def create_source_asset(a: SourceAssetIn) -> dict:
     aid = db.x("INSERT INTO source_assets (source_type, raw_uri, content_hash, license_type, ai_training_allowed,"
-               " chain_of_title_doc_uri, pii_scan_status, outcome_leakage_status, created_at)"
-               " VALUES (?,?,?,?,?,?,?,?,?)", a.source_type, a.raw_uri, a.content_hash, a.license_type,
-               int(a.ai_training_allowed), a.chain_of_title_doc_uri, a.pii_scan_status,
-               a.outcome_leakage_status, db.now())
+               " chain_of_title_doc_uri, pii_scan_status, outcome_leakage_status, domain_tag, acquisition_cost_usd,"
+               " created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)", a.source_type, a.raw_uri, a.content_hash,
+               a.license_type, int(a.ai_training_allowed), a.chain_of_title_doc_uri, a.pii_scan_status,
+               a.outcome_leakage_status, a.domain_tag, a.acquisition_cost_usd, db.now())
     return get_source_asset(aid)
 
 
@@ -180,7 +180,8 @@ def context(tid: int) -> sm.TaskContext:
         latest_verdict=Verdict(r["verdict"]) if r["verdict"] else None,
         verdict_version=cal["task_version"] if cal else None,
         sources=[sm.SourceState(s["id"], PiiScanStatus(s["pii_scan_status"]), LeakageStatus(s["outcome_leakage_status"]),
-                                bool(s["ai_training_allowed"]), s["license_type"], s["chain_of_title_doc_uri"])
+                                bool(s["ai_training_allowed"]), s["license_type"], s["chain_of_title_doc_uri"],
+                                s["gate_status"] == "APPROVED")
                  for s in srcs],
         author_id=r["author_id"], active_reviewer_id=rev["reviewer_id"] if rev else None)
 

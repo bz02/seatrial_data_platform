@@ -135,6 +135,8 @@ class SourceAssetIn(_In):
     chain_of_title_doc_uri: str = ""
     pii_scan_status: PiiScanStatus = PiiScanStatus.PENDING
     outcome_leakage_status: LeakageStatus = LeakageStatus.PENDING
+    domain_tag: str = ""
+    acquisition_cost_usd: float = Field(0, ge=0)
 
 
 class EnvSpec(_In):

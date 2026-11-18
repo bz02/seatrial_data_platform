@@ -147,3 +147,58 @@ def report(bid: int, format: str = Query("json", pattern="^(json|md|html)$"), an
     if format == "html":
         return HTMLResponse(loss_analyzer.to_html(rep))
     return rep
+
+
+# ---------------------------------------------------------------------------
+# P1 ingestion and compliance gate
+# ---------------------------------------------------------------------------
+def _inside_ingest_root(path: str) -> str:
+    import os
+    from pathlib import Path
+    root = Path(os.environ.get("SEATRAIL_INGEST_ROOT", str(config.DATA_DIR / "inbox"))).resolve()
+    p = Path(path).resolve()
+    if p != root and root not in p.parents:
+        raise HTTPException(403, f"server-side paths must be under SEATRAIL_INGEST_ROOT ({root})")
+    return str(p)
+
+
+@router.post("/ingestion/scan")
+def ingestion_scan(body: dict = Body(...), user=ADMIN):
+    from .ingestion import service
+    folder, git_url = body.get("folder"), body.get("git_url")
+    if folder:
+        folder = _inside_ingest_root(folder)
+    if git_url and not git_url.startswith("https://"):
+        git_url = _inside_ingest_root(git_url)
+    asset = SourceAssetIn(**{k: body[k] for k in SourceAssetIn.model_fields if k in body})
+    out = service.ingest(asset, folder=folder, git_url=git_url, base_commit=body.get("base_commit"),
+                         client_names=body.get("client_names") or [], domain_tag=body.get("domain_tag", ""),
+                         acquisition_cost_usd=float(body.get("acquisition_cost_usd", 0)))
+    return {k: v for k, v in out.items() if k != "manifest"} | {"files": len(out["manifest"])}
+
+
+@router.get("/ingestion/{aid}/alerts")
+def ingestion_alerts(aid: int, user=ADMIN):
+    from .ingestion import service
+    return service.alerts(aid)
+
+
+@router.post("/ingestion/{aid}/approve")
+def ingestion_approve(aid: int, user=ADMIN):
+    from .ingestion import compliance_gate
+    try:
+        return compliance_gate.approve(aid, user["id"])
+    except TransitionError as e:
+        conflict(e)
+
+
+@router.post("/ingestion/alerts/{alert_id}/resolve")
+def ingestion_resolve(alert_id: int, body: dict = Body(...), user=ADMIN):
+    from .ingestion import compliance_gate
+    return compliance_gate.resolve(alert_id, user["id"], body.get("note", ""))
+
+
+@router.post("/ingestion/alerts/{alert_id}/waive")
+def ingestion_waive(alert_id: int, body: dict = Body(...), user=ADMIN):
+    from .ingestion import compliance_gate
+    return compliance_gate.waive(alert_id, user["id"], body.get("reason", ""))
