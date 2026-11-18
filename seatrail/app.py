@@ -781,7 +781,7 @@ def cap_stop(sid: int, user=Depends(capture_user)):
 # Web apps
 # ---------------------------------------------------------------------------
 PAGES = {"": "landing.html", "app": "app.html", "login": "login.html", "expert": "expert.html", "review": "review.html", "market": "market.html",
-         "enterprise": "enterprise.html", "demo-erp": "demo-erp.html"}
+         "enterprise": "enterprise.html", "demo-erp": "demo-erp.html", "workbench": "workbench.html", "finance": "finance.html"}
 
 
 def _page(name):
@@ -801,3 +801,9 @@ if RECORDER.exists():
 @app.get("/health")
 def health():
     return {"ok": True, "judge": config.JUDGE_ENABLED, "open_marketplace": config.OPEN_MARKETPLACE}
+
+
+# Foundry API (/api/v1): batches, tasks + state machine, sandbox sanity checks, calibration, reports.
+from .foundry.api import router as foundry_router  # noqa: E402
+
+app.include_router(foundry_router)

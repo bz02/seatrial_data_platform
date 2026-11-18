@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Foundry Finance</title>
+<link rel="stylesheet" href="/static/app.css">
+<style>.fin { display:grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap:16px; align-items:start; }
+@media (max-width: 1000px) { .fin { grid-template-columns: 1fr; } } .neg { color:#b42318; }</style>
+</head><body>
+<main>
+  <h1>Unit economics</h1>
+  <p class="muted">Revenue is recognised on client acceptance. Costs come from the ledger: SME labour, rework, model API, sandbox compute, source acquisition and warranty replacements.</p>
+  <div class="panel tight"><div class="table-wrap"><table id="batches"></table></div></div>
+  <div class="panel" id="detail" style="margin-top:16px"><p class="muted">Pick a batch.</p></div>
+  <div class="fin" style="margin-top:16px">
+    <div class="panel"><div class="row"><h2 style="margin:0">Payouts due</h2><div class="spacer"></div><button class="primary" id="pay">Run payouts</button></div><table id="pending"></table><div id="payout"></div></div>
+    <div class="panel"><h2>Warranty claims</h2><table id="claims"></table></div>
+  </div>
+</main>
+<script src="/static/common.js"></script>
+<script>
+const $ = (id) => document.getElementById(id);
+const V1 = "/api/v1";
+const usd = (v) => v == null ? "–" : `<span class="${v < 0 ? "neg" : ""}">$${Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>`;
+
+async function load() {
+  const rows = await ST.api(V1 + "/finance/batches");
+  $("batches").innerHTML = `<tr><th>Batch</th><th>Client</th><th>Deal</th><th class="num">Revenue</th><th class="num">Cost</th><th class="num">Margin</th><th class="num">Cost / accepted</th></tr>` +
+    (rows.map((b) => `<tr class="click" data-b="${b.batch_id}"><td>#${b.batch_id}</td><td>${ST.esc(b.client_name)}</td><td>${b.deal_type}</td>
+      <td class="num">${usd(b.revenue_usd)}</td><td class="num">${usd(b.total_cost_usd)}</td><td class="num">${b.gross_margin_pct == null ? "–" : ST.pct(b.gross_margin_pct)}</td>
+      <td class="num">${usd(b.cost_per_accepted_task_usd)}</td></tr>`).join("") || `<tr><td colspan="7" class="muted">No batches yet.</td></tr>`);
+  $("batches").querySelectorAll("[data-b]").forEach((tr) => tr.onclick = () => show(tr.dataset.b));
+  const p = await ST.api(V1 + "/finance/payouts/pending");
+  $("pending").innerHTML = `<tr><th>Expert</th><th class="num">Lines</th><th class="num">Balance</th></tr>` +
+    (p.map((x) => `<tr><td>${ST.esc(x.name)}</td><td class="num">${x.lines}</td><td class="num">${usd(x.amount_usd)}</td></tr>`).join("") || `<tr><td colspan="3" class="muted">Nothing due.</td></tr>`);
+  const c = await ST.api(V1 + "/warranty/claims");
+  $("claims").innerHTML = `<tr><th>#</th><th>Task</th><th>Defect</th><th>Status</th><th></th></tr>` + (c.map((x) => `<tr><td>${x.id}</td><td>${x.task_id}</td>
+    <td><span class="tag gray">${ST.label(x.defect_tag)}</span><div class="small">${ST.esc(x.detail)}</div></td><td>${x.status}${x.resolution ? " · " + x.resolution : ""}</td>
+    <td>${x.status === "OPEN" ? `<button data-c="${x.id}" data-v="1" data-r="REPLACED">Replace</button> <button data-c="${x.id}" data-v="1" data-r="CREDITED">Credit</button> <button data-c="${x.id}" data-v="0" class="ghost">Reject</button>` : ""}</td></tr>`).join("") || `<tr><td colspan="5" class="muted">No claims.</td></tr>`);
+  $("claims").querySelectorAll("[data-c]").forEach((b) => b.onclick = async () => {
+    try { await ST.api(`${V1}/warranty/claims/${b.dataset.c}/decide`, { method: "POST", body: { valid: b.dataset.v === "1", resolution: b.dataset.r || "REPLACED" } }); load(); }
+    catch (e) { ST.toast(e.message); }
+  });
+}
+
+async function show(bid) {
+  const e = await ST.api(`${V1}/finance/batches/${bid}`);
+  const f = e.funnel;
+  const funnel = [["tasks", f.tasks], ["reached SME review", f.reached_sme_review], ["QA approved", f.qa_approved],
+    ["delivered", f.delivered], ["accepted", f.accepted], ["returned under warranty", f.returned]];
+  $("detail").innerHTML = `<h2>Batch #${e.batch_id} · ${ST.esc(e.client_name)}</h2>
+    <div class="kpis">
+      <div class="kpi"><div class="v">${usd(e.revenue_usd)}</div><div class="l">revenue</div></div>
+      <div class="kpi"><div class="v">${usd(e.total_cost_usd)}</div><div class="l">cost</div></div>
+      <div class="kpi"><div class="v">${e.gross_margin_pct == null ? "–" : ST.pct(e.gross_margin_pct)}</div><div class="l">gross margin</div></div>
+      <div class="kpi"><div class="v">${usd(e.cost_per_accepted_task_usd)}</div><div class="l">cost per accepted task (quoted ${usd(e.quoted_cost_per_task_usd)})</div></div>
+      <div class="kpi"><div class="v">${usd(e.warranty.reserve_usd)}</div><div class="l">warranty reserve</div></div>
+    </div>
+    ${e.over_quote ? '<div class="notice warn">Cost per accepted task is above the quote.</div>' : ""}
+    <div class="fin"><div><h3>Funnel</h3><table>${funnel.map(([k, v]) => `<tr><td>${k}</td><td class="num">${v}</td></tr>`).join("")}</table>
+      <p class="small muted">QA return rate ${e.qa_return_rate == null ? "–" : ST.pct(e.qa_return_rate)} · synthesis waste ${usd(e.synthesis_waste_usd)}</p></div>
+    <div><h3>Costs</h3><table>${Object.entries(e.costs_usd).map(([k, v]) => `<tr><td>${ST.label(k)}</td><td class="num">${usd(v)}</td></tr>`).join("") || '<tr><td class="muted">No costs yet.</td></tr>'}</table>
+      <h3>Owed</h3><table><tr><td>payouts payable</td><td class="num">${usd(e.liabilities.payouts_payable_usd)}</td></tr><tr><td>held until acceptance</td><td class="num">${usd(e.liabilities.payouts_held_usd)}</td></tr>
+      ${e.receivables.map((r) => `<tr><td>release ${r.release_id} receivable, due ${ST.date(r.due_at)}</td><td class="num">${usd(r.amount_usd)}</td></tr>`).join("")}</table></div></div>`;
+}
+
+$("pay").onclick = async () => {
+  const out = await ST.api(V1 + "/finance/payouts/run", { method: "POST", body: {} });
+  $("payout").innerHTML = out.length ? `<p class="small">Paid ${out.length} experts. <a href="${V1}/finance/payouts/${encodeURIComponent(out[0].reference)}.csv">Download CSV</a></p>` : '<p class="small muted">Nothing to pay.</p>';
+  load();
+};
+ST.topbar("/finance", ["admin"]).then(load);
+</script>
+</body></html>
