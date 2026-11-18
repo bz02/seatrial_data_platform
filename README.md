@@ -14,10 +14,13 @@ Two products share one core:
 | Extras | Process discovery: workflow maps, variants, coverage, what to record next | Frontier-model baseline per task, model-vs-expert gap, expert tiers |
 
 **Foundry** (`seatrail/foundry/`, see [docs/foundry.md](docs/foundry.md)): the production line for
-verifiable RL environments and eval tasks. Contract batches, a guarded task state machine, pinned
-sandboxes with anti-cheat grading (golden = 100%, empty = 0% before any task moves), frontier-model
-difficulty calibration (pass@k, pass^k, 0% / 100% rejection) and buyer-ready Loss Analysis reports,
-under `/api/v1`.
+verifiable RL environments and eval tasks, under `/api/v1`: source ingestion with leakage scrubbing,
+PII/secret redaction and a compliance gate; a guarded task state machine; pinned sandboxes with
+anti-cheat grading (golden = 100%, empty = 0% before any task moves); frontier-model difficulty
+calibration (pass@k, pass^k) and Loss Analysis reports; SME dispatch by domain, capacity and pod with
+an expert workbench (`/workbench`) and QA review; hybrid synthesis with a devil's-advocate critic;
+checksummed releases with datasheets and signed delivery links; unit economics, expert payouts and a
+60-day warranty (`/finance`); and drift monitoring that turns saturated tasks into harder evolutions.
 
 Shared core: event-sourced recording → `seatrail.trajectory.v1` records → PII redaction,
 near-duplicate detection, reasoning coverage, model rubric grading (Claude, optional) → consensus
@@ -88,8 +91,9 @@ python scripts/bootstrap.py org --name "Acme" --admin-email it@acme.com --admin-
 python -m pytest -q
 ```
 
-75 tests: foundry (state machine guards, sandbox isolation against a malicious agent, graders,
-calibration routing and reports with mock models), task generators and verifier, PII redaction, duplicate detection, fee settlement, the
+123 tests: foundry (state machine guards, ingestion and redaction, sandbox isolation against a
+malicious agent, graders, calibration routing and reports, dispatch and QA rules, synthesis, release
+packaging and delivery links, payouts and warranty, drift and evolution, all with mock models), task generators and verifier, PII redaction, duplicate detection, fee settlement, the
 model-grader and baseline-agent call shapes (with a fake client), auth and CSRF, qualification and
 retakes, consensus review, corrections → preference export, process discovery, custom requests,
 leads, and full API flows for both editions.
@@ -126,6 +130,12 @@ seatrail/
     models.py, schema.py, state_machine.py, store.py, api.py, jobs.py
     sandbox_runner/    pinned images, MCP tool server, backends, anti-cheat grading, verifiers
     calibrator/        model adapters, pass@k calibration and routing, loss analysis reports
+    ingestion/         snapshots, leakage scrubber, PII/secret redaction, compliance gate
+    dispatch/          expert queues, authoring rules (prompt linter, atomic rubric), QA review
+    synthesizer/       audit -> transform -> devil's advocate -> sanity check
+    delivery/          release packaging, datasheet, dedup, signed delivery links
+    finance/           earnings, payouts, revenue, warranty, unit economics
+    drift/             drift checks on new models, harder evolutions, cron entry point
   demo.py              demo seed data (scripted; never sell or export these)
   static/              landing page and web apps
 recorder/              browser recorder + extension

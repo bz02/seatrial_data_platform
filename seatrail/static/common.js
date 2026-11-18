@@ -49,7 +49,7 @@ const ST = {
     }
     if (!me) { location.href = "/login?next=" + encodeURIComponent(location.pathname + location.hash); return new Promise(() => {}); }
     ST.me = me;
-    const links = [["/app", "Home"], ["/expert", "Expert"], ["/market", "Marketplace"], ["/enterprise", "Enterprise"], ["/review", "Review"]];
+    const links = [["/app", "Home"], ["/expert", "Expert"], ["/market", "Marketplace"], ["/enterprise", "Enterprise"], ["/review", "Review"], ["/workbench", "Workbench"], ["/finance", "Finance"]];
     const bar = document.createElement("header");
     bar.className = "topbar";
     const allowed = demoUsers.filter((u) => !roles || roles.includes(u.role));
