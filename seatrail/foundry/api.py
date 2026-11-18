@@ -11,7 +11,7 @@ from .calibrator import calibrate, loss_analyzer
 from .calibrator.adapters import default_panel, get_adapter
 from .models import (AssignmentIn, CalibrationRunIn, ContractBatchIn, ExpertProfileIn, LeakageStatus, PiiScanStatus,
                      QaDecisionIn, RubricCriterionIn, SourceAssetIn, SynthRunIn, TaskIn, TransitionIn,
-                     ClaimDecisionIn, WarrantyClaimIn)
+                     ClaimDecisionIn, DriftRunIn, WarrantyClaimIn)
 from .sandbox_runner.runner import run_env_sanity_check
 from .state_machine import TransitionError
 
@@ -566,3 +566,46 @@ def finance_payout_csv(reference: str, user=ADMIN):
 def wb_earnings(user=EXPERT):
     from .finance import service as finance
     return finance.earnings(user["id"])
+
+
+# ---------------------------------------------------------------------------
+# P8: drift monitoring and harder evolutions
+# ---------------------------------------------------------------------------
+def _drift_panel(models: list[str]) -> list[str]:
+    import os
+    env_models = [m.strip() for m in os.environ.get("SEATRAIL_DRIFT_MODELS", "").split(",") if m.strip()]
+    return models or env_models or default_panel()
+
+
+@router.post("/drift/run")
+def drift_run(body: DriftRunIn, sync: bool = Query(False), user=ADMIN):
+    from .drift import monitor
+    from .synthesizer import llm
+    models = _drift_panel(body.models)
+    for m in models:
+        get_adapter(m)
+    author = critic = None
+    if body.harden:
+        a, c = llm.default_models()
+        author = llm.get_text_model(body.author_model or a)
+        critic = llm.get_text_model(body.critic_model or c)
+
+    def fn():
+        return monitor.run(body.task_ids, body.batch_id, models=models, k=body.k, concurrency=body.concurrency,
+                           harden=body.harden, author_model=author, critic_model=critic)
+    return jobs.submit("drift", {**body.model_dump(), "models": models}, fn, sync=sync or config.FOUNDRY_SYNC_JOBS)
+
+
+@router.get("/drift/reports")
+def drift_reports(batch_id: int | None = None, user=ADMIN):
+    from .drift import monitor
+    return monitor.reports(batch_id)
+
+
+@router.post("/tasks/{tid}/evolve")
+def task_evolve(tid: int, body: dict = Body(default={}), user=ADMIN):
+    from .drift import monitor
+    from .synthesizer import llm
+    a, c = llm.default_models()
+    return monitor.evolve(tid, llm.get_text_model(body.get("author_model") or a),
+                          llm.get_text_model(body.get("critic_model") or c))

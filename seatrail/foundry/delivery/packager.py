@@ -91,11 +91,19 @@ def _pii_findings(env: dict, client_names: list[str]) -> list[str]:
     return out
 
 
-def _prior_shingles(exclude_release: int | None = None) -> list[tuple[int, int, set[str], str]]:
-    rows = db.q("SELECT rt.release_id, rt.task_id, rt.shingles, rt.content_hash FROM release_tasks rt JOIN releases r"
-                " ON r.id=rt.release_id WHERE r.status!='REVOKED'")
-    return [(r["release_id"], r["task_id"], set(r["shingles"].split()), r["content_hash"]) for r in rows
-            if r["release_id"] != exclude_release]
+def _prior_shingles() -> list[tuple[int, int, set[str], str, str]]:
+    rows = db.q("SELECT rt.release_id, rt.task_id, rt.shingles, rt.content_hash, r.client_name FROM release_tasks rt"
+                " JOIN releases r ON r.id=rt.release_id WHERE r.status!='REVOKED'")
+    return [(r["release_id"], r["task_id"], set(r["shingles"].split()), r["content_hash"], r["client_name"])
+            for r in rows]
+
+
+def ancestors(tid: int) -> set[int]:
+    out, cur = set(), db.q1("SELECT parent_task_id p FROM foundry_tasks WHERE id=?", tid)
+    while cur and cur["p"] and cur["p"] not in out:
+        out.add(cur["p"])
+        cur = db.q1("SELECT parent_task_id p FROM foundry_tasks WHERE id=?", cur["p"])
+    return out
 
 
 def _sha(p: Path) -> str:
@@ -133,8 +141,11 @@ def package_batch(batch_id: int, task_ids: list[int] | None = None, include_traj
             continue
         h = content_hash(t["env"])
         sh = shingles(task_text(t["env"]))
+        # a harder evolution of a task this client already has is meant to resemble it; anyone else's is not
+        family = ancestors(tid)
+        near = [p for p in prior if not (p[1] in family and p[4] == batch["client_name"])]
         dup = next((p for p in prior if p[3] == h), None) or next(
-            (p for p in prior if jaccard(sh, p[2]) >= NEAR_DUP), None)
+            (p for p in near if jaccard(sh, p[2]) >= NEAR_DUP), None)
         if dup:
             excluded.append({"task_id": tid, "reason": f"duplicate of task {dup[1]} (release {dup[0]})"
                              if dup[0] else f"near-duplicate of task {dup[1]} in this release"})
@@ -149,7 +160,7 @@ def package_batch(batch_id: int, task_ids: list[int] | None = None, include_traj
             excluded.append({"task_id": tid, "reason": f"{e.code}: {e}"})
             continue
         picked.append((t, h, sh))
-        prior.append((0, tid, sh, h))
+        prior.append((0, tid, sh, h, batch["client_name"]))
     if not picked:
         raise TransitionError("nothing to package: " + ("; ".join(f"{x['task_id']}: {x['reason']}" for x in excluded)
                                                         or "no QA-approved tasks in this batch"), "nothing_to_package")

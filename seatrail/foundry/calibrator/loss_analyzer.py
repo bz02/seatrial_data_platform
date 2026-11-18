@@ -97,7 +97,8 @@ def batch_report(batch_id: int, anonymize_models: bool = False) -> dict:
     task_ids = store.batch_task_ids(batch_id)
     latest_groups = {}
     for tid in task_ids:
-        r = db.q1("SELECT group_id FROM calibration_runs WHERE task_id=? ORDER BY id DESC LIMIT 1", tid)
+        r = db.q1("SELECT group_id FROM calibration_runs WHERE task_id=? AND purpose='CALIBRATION'"
+                  " ORDER BY id DESC LIMIT 1", tid)
         if r:
             latest_groups[tid] = r["group_id"]
     runs = [r for tid, g in latest_groups.items()

@@ -200,7 +200,8 @@ def assign(tid: int, a: AssignmentIn) -> dict:
 def context(tid: int) -> sm.TaskContext:
     r = _row(tid)
     sanity = db.q1("SELECT 1 FROM sanity_checks WHERE task_id=? AND task_version=? AND passed=1", tid, r["version"])
-    cal = db.q1("SELECT verdict, task_version FROM calibration_runs WHERE task_id=? ORDER BY id DESC LIMIT 1", tid)
+    cal = db.q1("SELECT verdict, task_version FROM calibration_runs WHERE task_id=? AND purpose='CALIBRATION'"
+                " ORDER BY id DESC LIMIT 1", tid)
     srcs = db.q("SELECT s.* FROM source_assets s JOIN task_source_assets t ON t.asset_id=s.id WHERE t.task_id=?", tid)
     rev = db.q1("SELECT reviewer_id FROM sme_assignments WHERE task_id=? AND active=1 ORDER BY id DESC LIMIT 1", tid)
     from .dispatch.rules import lint_prompt, rubric_problems

@@ -278,3 +278,14 @@ class ClaimDecisionIn(_In):
     valid: bool
     resolution: str = Field("REPLACED", pattern="^(REPLACED|CREDITED)$")
     note: str = ""
+
+
+class DriftRunIn(_In):
+    task_ids: list[int] | None = None
+    batch_id: int | None = None
+    models: list[str] = Field(default_factory=list)   # default: SEATRAIL_DRIFT_MODELS, else the calibration panel
+    k: int = Field(4, ge=1, le=64)
+    concurrency: int = Field(4, ge=1, le=64)
+    harden: bool = True
+    author_model: str | None = None
+    critic_model: str | None = None

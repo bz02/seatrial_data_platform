@@ -87,6 +87,37 @@ def _run_model(task_id: int, spec: EnvSpec, sealed: dict, adapter: ModelAdapter,
             "cost": sum(r["traj"].cost_usd for r in rows), "trace_dir": str(d)}
 
 
+def record_runs(task_id: int, version: int, per_model: list[dict], k: int, lo: float, hi: float, group: str,
+                purpose: str = "CALIBRATION") -> list[dict]:
+    """Persist one panel run (per-model rows + every rollout) and book its model spend."""
+    runs = []
+    for m in per_model:
+        rate = m["c"] / m["n"] if m["n"] else 0.0
+        v = classify(rate, m["c"], lo, hi)
+        rid = db.x("INSERT INTO calibration_runs (task_id, task_version, model_name, k_rollouts, pass_count, pass_at_1,"
+                   " pass_at_k, pass_hat_k, mean_score, submission_rate, avg_steps, token_cost_usd, verdict, trace_uri,"
+                   " group_id, purpose, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                   task_id, version, m["model"], m["n"], m["c"], pass_at_k(m["n"], m["c"], 1),
+                   pass_at_k(m["n"], m["c"], k), pass_hat_k(m["n"], m["c"], k), m["mean_score"],
+                   m["submission_rate"], m["avg_steps"], round(m["cost"], 6), v, m["trace_dir"], group, purpose, db.now())
+        for r in m["rows"]:
+            t, g = r["traj"], r["grader"]
+            db.x("INSERT INTO rollouts (run_id, k_index, score, passed, submitted, steps, stop_reason, failure_bucket,"
+                 " input_tokens, output_tokens, cost_usd, latency_s, grader, trace_uri) VALUES"
+                 " (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", rid, r["k_index"], g.overall_score if g else 0.0,
+                 int(bool(g and g.passed)), int(t.submitted), t.steps, t.stop_reason, r["bucket"], t.input_tokens,
+                 t.output_tokens, round(t.cost_usd, 6), round(t.latency_s, 3), db.dumps(g.model_dump() if g else {}),
+                 r["trace_uri"])
+        if m["cost"]:
+            store.ledger(LedgerKind.MODEL_API, m["cost"], task_id, f"{purpose.lower()} {group} {m['model']}")
+        runs.append({"run_id": rid, "model": m["model"], "k": m["n"], "pass_count": m["c"],
+                     "pass_at_1": round(pass_at_k(m["n"], m["c"], 1), 4),
+                     "pass_at_k": round(pass_at_k(m["n"], m["c"], k), 4),
+                     "pass_hat_k": round(pass_hat_k(m["n"], m["c"], k), 4), "verdict": v,
+                     "cost_usd": round(m["cost"], 6)})
+    return runs
+
+
 def calibrate_task(task_id: int, adapters: list[ModelAdapter] | None = None, models: list[str] | None = None,
                    k: int = 4, concurrency: int = 4, actor_id: int | None = None) -> dict:
     adapters = adapters or [get_adapter(m) for m in (models or [])]
@@ -106,31 +137,7 @@ def calibrate_task(task_id: int, adapters: list[ModelAdapter] | None = None, mod
     breaker = CircuitBreaker()
     per_model = [_run_model(task_id, spec, sealed, a, k, concurrency, breaker, group) for a in adapters]
 
-    runs = []
-    for m in per_model:
-        rate = m["c"] / m["n"] if m["n"] else 0.0
-        v = classify(rate, m["c"], lo, hi)
-        rid = db.x("INSERT INTO calibration_runs (task_id, task_version, model_name, k_rollouts, pass_count, pass_at_1,"
-                   " pass_at_k, pass_hat_k, mean_score, submission_rate, avg_steps, token_cost_usd, verdict, trace_uri,"
-                   " group_id, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                   task_id, task["version"], m["model"], m["n"], m["c"], pass_at_k(m["n"], m["c"], 1),
-                   pass_at_k(m["n"], m["c"], k), pass_hat_k(m["n"], m["c"], k), m["mean_score"],
-                   m["submission_rate"], m["avg_steps"], round(m["cost"], 6), v, m["trace_dir"], group, db.now())
-        for r in m["rows"]:
-            t, g = r["traj"], r["grader"]
-            db.x("INSERT INTO rollouts (run_id, k_index, score, passed, submitted, steps, stop_reason, failure_bucket,"
-                 " input_tokens, output_tokens, cost_usd, latency_s, grader, trace_uri) VALUES"
-                 " (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", rid, r["k_index"], g.overall_score if g else 0.0,
-                 int(bool(g and g.passed)), int(t.submitted), t.steps, t.stop_reason, r["bucket"], t.input_tokens,
-                 t.output_tokens, round(t.cost_usd, 6), round(t.latency_s, 3), db.dumps(g.model_dump() if g else {}),
-                 r["trace_uri"])
-        if m["cost"]:
-            store.ledger(LedgerKind.MODEL_API, m["cost"], task_id, f"calibration {group} {m['model']}")
-        runs.append({"run_id": rid, "model": m["model"], "k": m["n"], "pass_count": m["c"],
-                     "pass_at_1": round(pass_at_k(m["n"], m["c"], 1), 4),
-                     "pass_at_k": round(pass_at_k(m["n"], m["c"], k), 4),
-                     "pass_hat_k": round(pass_hat_k(m["n"], m["c"], k), 4), "verdict": v,
-                     "cost_usd": round(m["cost"], 6)})
+    runs = record_runs(task_id, task["version"], per_model, k, lo, hi, group)
 
     total_n = sum(m["n"] for m in per_model)
     total_c = sum(m["c"] for m in per_model)

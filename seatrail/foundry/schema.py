@@ -345,4 +345,19 @@ CREATE TABLE IF NOT EXISTS warranty_claims (
   created_at REAL NOT NULL,
   decided_at REAL
 );
+
+-- P8: drift. One row per shipped task re-measured on the current panel.
+CREATE TABLE IF NOT EXISTS drift_reports (
+  id INTEGER PRIMARY KEY,
+  task_id INTEGER NOT NULL REFERENCES foundry_tasks(id),
+  group_id TEXT NOT NULL,           -- calibration_runs.group_id of the DRIFT run
+  baseline_rate REAL,               -- pooled pass rate at calibration time (NULL if never calibrated)
+  current_rate REAL NOT NULL,
+  models TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('STABLE','DRIFTING','SATURATED','ENVIRONMENT_ERROR')),
+  action TEXT NOT NULL DEFAULT '',  -- EVOLVED | EVOLUTION_FAILED | ''
+  child_task_id INTEGER REFERENCES foundry_tasks(id),
+  detail TEXT NOT NULL DEFAULT '',
+  created_at REAL NOT NULL
+);
 """
