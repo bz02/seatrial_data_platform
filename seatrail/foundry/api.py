@@ -10,7 +10,7 @@ from . import jobs, store
 from .calibrator import calibrate, loss_analyzer
 from .calibrator.adapters import default_panel, get_adapter
 from .models import (AssignmentIn, CalibrationRunIn, ContractBatchIn, ExpertProfileIn, LeakageStatus, PiiScanStatus,
-                     QaDecisionIn, RubricCriterionIn, SourceAssetIn, TaskIn, TransitionIn)
+                     QaDecisionIn, RubricCriterionIn, SourceAssetIn, SynthRunIn, TaskIn, TransitionIn)
 from .sandbox_runner.runner import run_env_sanity_check
 from .state_machine import TransitionError
 
@@ -296,7 +296,7 @@ def wb_seed_files(aid: int, path: str | None = None, user=EXPERT):
 def wb_create_task(body: TaskIn, user=EXPERT):
     from .. import db
     from .dispatch import service as dispatch
-    body = body.model_copy(update={"author_id": user["id"]})
+    body = body.model_copy(update={"author_id": user["id"], "origin": "HUMAN", "parent_task_id": None})
     for aid in body.source_asset_ids:
         c = db.q1("SELECT user_id FROM seed_claims WHERE asset_id=?", aid)
         if user["role"] != "admin" and (not c or c["user_id"] != user["id"]):
@@ -399,3 +399,27 @@ def wb_lint(body: dict = Body(...), user=EXPERT):
         out["criterion"] = criterion_problems(c.get("kind", ""), c.get("spec_json") or {},
                                               c.get("ground_truth_evidence_ref", ""))
     return out
+
+
+# ---------------------------------------------------------------------------
+# P5: hybrid synthesis
+# ---------------------------------------------------------------------------
+@router.post("/synth/runs")
+def synth_run(body: SynthRunIn, sync: bool = Query(False), user=ADMIN):
+    from .synthesizer import llm, pipeline
+    d_model, d_critic = llm.default_models()
+    m, c = llm.get_text_model(body.model or d_model), llm.get_text_model(body.critic_model or d_critic)
+    store.get_batch(body.batch_id)
+    store.get_source_asset(body.asset_id)
+
+    def fn():
+        return pipeline.synthesize(body.asset_id, body.batch_id, m, c, max_candidates=body.max_candidates,
+                                   archetype=body.archetype, author_id=body.author_id,
+                                   max_revisions=body.max_revisions)
+    return jobs.submit("synthesis", body.model_dump(), fn, sync=sync or config.FOUNDRY_SYNC_JOBS)
+
+
+@router.get("/synth/runs")
+def synth_runs(asset_id: int | None = None, group_id: str | None = None, user=ADMIN):
+    from .synthesizer import pipeline
+    return pipeline.runs(asset_id, group_id)

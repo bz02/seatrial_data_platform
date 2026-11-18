@@ -78,6 +78,8 @@ CREATE TABLE IF NOT EXISTS foundry_tasks (
   verdict TEXT CHECK (verdict IN ('TOO_HARD_0PCT','SWEET_SPOT','SATURATED_100PCT')),
   rework_reason TEXT NOT NULL DEFAULT '',
   version INTEGER NOT NULL DEFAULT 1,
+  origin TEXT NOT NULL DEFAULT 'HUMAN' CHECK (origin IN ('HUMAN','SYNTH','EVOLVED')),
+  parent_task_id INTEGER REFERENCES foundry_tasks(id),   -- set on harder evolutions and warranty swaps
   created_at REAL NOT NULL,
   updated_at REAL NOT NULL
 );
@@ -137,6 +139,7 @@ CREATE TABLE IF NOT EXISTS calibration_runs (
   verdict TEXT NOT NULL CHECK (verdict IN ('TOO_HARD_0PCT','SWEET_SPOT','SATURATED_100PCT')),
   trace_uri TEXT NOT NULL,
   group_id TEXT NOT NULL,           -- one calibration call across the model panel
+  purpose TEXT NOT NULL DEFAULT 'CALIBRATION' CHECK (purpose IN ('CALIBRATION','DRIFT')),
   created_at REAL NOT NULL
 );
 
@@ -174,7 +177,8 @@ CREATE TABLE IF NOT EXISTS cost_ledger (
   id INTEGER PRIMARY KEY,
   task_id INTEGER REFERENCES foundry_tasks(id),
   batch_id INTEGER REFERENCES contract_batches(id),
-  kind TEXT NOT NULL CHECK (kind IN ('SME_LABOR','COMPUTE','MODEL_API','REWORK')),
+  kind TEXT NOT NULL CHECK (kind IN ('SME_LABOR','COMPUTE','MODEL_API','REWORK','SOURCE_ACQUISITION',
+    'WARRANTY_REPLACEMENT')),
   amount_usd REAL NOT NULL,
   ref TEXT NOT NULL DEFAULT '',
   created_at REAL NOT NULL
@@ -236,4 +240,23 @@ CREATE TRIGGER IF NOT EXISTS task_audit_no_update BEFORE UPDATE ON task_audit_ev
 BEGIN SELECT RAISE(ABORT, 'task audit events are immutable'); END;
 CREATE TRIGGER IF NOT EXISTS task_audit_no_delete BEFORE DELETE ON task_audit_events
 BEGIN SELECT RAISE(ABORT, 'task audit events are immutable'); END;
+
+-- P5: hybrid synthesis. One row per candidate the auditor proposed, with what each stage decided.
+CREATE TABLE IF NOT EXISTS synth_runs (
+  id INTEGER PRIMARY KEY,
+  group_id TEXT NOT NULL,
+  asset_id INTEGER NOT NULL REFERENCES source_assets(id),
+  batch_id INTEGER NOT NULL REFERENCES contract_batches(id),
+  model_name TEXT NOT NULL,
+  critic_model TEXT NOT NULL,
+  candidate TEXT NOT NULL,          -- auditor's proposal (JSON)
+  status TEXT NOT NULL CHECK (status IN ('ACCEPTED','REJECTED')),
+  rejected_at TEXT NOT NULL DEFAULT '',  -- AUDIT | TRANSFORM | RULES | CRITIC | SANITY
+  reasons TEXT NOT NULL DEFAULT '[]',
+  critic TEXT NOT NULL DEFAULT '{}',
+  revisions INTEGER NOT NULL DEFAULT 0,
+  task_id INTEGER REFERENCES foundry_tasks(id),
+  cost_usd REAL NOT NULL DEFAULT 0,
+  created_at REAL NOT NULL
+);
 """

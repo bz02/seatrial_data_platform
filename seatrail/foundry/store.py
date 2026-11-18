@@ -89,13 +89,14 @@ def create_task(t: TaskIn) -> dict:
     now = db.now()
     with db.tx() as c:
         cur = c.execute("INSERT INTO foundry_tasks (batch_id, domain, archetype, title, status, author_id, env,"
-                        " sealed, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                        " sealed, origin, parent_task_id, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                         (t.batch_id, t.domain, t.archetype, t.title, TaskStatus.DRAFT, t.author_id,
-                         t.env.model_dump_json(), seal(t.sealed.model_dump()), now, now))
+                         t.env.model_dump_json(), seal(t.sealed.model_dump()), t.origin, t.parent_task_id, now, now))
         tid = cur.lastrowid
         for aid in t.source_asset_ids:
             c.execute("INSERT INTO task_source_assets (task_id, asset_id) VALUES (?,?)", (tid, aid))
-    audit(tid, "created", t.author_id, batch_id=t.batch_id, archetype=t.archetype)
+    audit(tid, "created", t.author_id, batch_id=t.batch_id, archetype=t.archetype, origin=t.origin,
+          parent_task_id=t.parent_task_id)
     return get_task(tid)
 
 
@@ -256,8 +257,9 @@ def set_verdict(tid: int, verdict: Verdict) -> None:
 # ---------------------------------------------------------------------------
 # Ledger
 # ---------------------------------------------------------------------------
-def ledger(kind: LedgerKind, amount_usd: float, task_id: int | None = None, ref: str = "") -> None:
-    batch_id = _row(task_id)["batch_id"] if task_id else None
+def ledger(kind: LedgerKind, amount_usd: float, task_id: int | None = None, ref: str = "",
+           batch_id: int | None = None) -> None:
+    batch_id = _row(task_id)["batch_id"] if task_id else batch_id
     db.x("INSERT INTO cost_ledger (task_id, batch_id, kind, amount_usd, ref, created_at) VALUES (?,?,?,?,?,?)",
          task_id, batch_id, kind, round(amount_usd, 6), ref, db.now())
 

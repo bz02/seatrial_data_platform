@@ -53,6 +53,8 @@ class TaskStatus(StrEnum):
     CALIBRATING = "CALIBRATING"
     SME_REVIEW = "SME_REVIEW"
     REWORK = "REWORK"
+    SOURCE_ACQUISITION = "SOURCE_ACQUISITION"
+    WARRANTY_REPLACEMENT = "WARRANTY_REPLACEMENT"
     QA_APPROVED = "QA_APPROVED"
     PACKAGED = "PACKAGED"
     DELIVERED = "DELIVERED"
@@ -180,6 +182,8 @@ class TaskIn(_In):
     source_asset_ids: list[int] = Field(default_factory=list)
     env: EnvSpec
     sealed: SealedSpec
+    origin: str = Field("HUMAN", pattern="^(HUMAN|SYNTH|EVOLVED)$")
+    parent_task_id: int | None = None
 
 
 class RubricCriterionIn(_In):
@@ -251,3 +255,14 @@ class GraderResult(BaseModel):
     sub_metrics: dict[str, float] = Field(default_factory=dict)
     criteria_results: list[CriterionResult] = Field(default_factory=list)
     failure_mode: str | None = None   # missing_deliverable | format | environment | precision | citation
+
+
+class SynthRunIn(_In):
+    asset_id: int
+    batch_id: int
+    model: str | None = None          # author model; default SEATRAIL_SYNTH_MODEL
+    critic_model: str | None = None   # devil's advocate; default SEATRAIL_CRITIC_MODEL
+    max_candidates: int = Field(3, ge=1, le=20)
+    archetype: Archetype | None = None
+    author_id: int | None = None      # SME who will own the drafts
+    max_revisions: int = Field(1, ge=0, le=3)
