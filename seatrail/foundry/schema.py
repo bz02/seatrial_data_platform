@@ -259,4 +259,41 @@ CREATE TABLE IF NOT EXISTS synth_runs (
   cost_usd REAL NOT NULL DEFAULT 0,
   created_at REAL NOT NULL
 );
+
+-- P6: packaging and delivery. A task ships in at most one live release.
+CREATE TABLE IF NOT EXISTS releases (
+  id INTEGER PRIMARY KEY,
+  batch_id INTEGER NOT NULL REFERENCES contract_batches(id),
+  client_name TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'BUILT' CHECK (status IN ('BUILT','DELIVERED','REVOKED')),
+  canary TEXT NOT NULL,             -- contamination canary embedded in every record
+  format_version TEXT NOT NULL,
+  path TEXT NOT NULL,               -- release directory; the zip sits next to it
+  sha256 TEXT NOT NULL,             -- of the zip
+  task_count INTEGER NOT NULL,
+  include_trajectories INTEGER NOT NULL DEFAULT 0,
+  excluded TEXT NOT NULL DEFAULT '[]',
+  created_by INTEGER REFERENCES users(id),
+  created_at REAL NOT NULL,
+  delivered_at REAL,
+  link_expires_at REAL
+);
+
+CREATE TABLE IF NOT EXISTS release_tasks (
+  release_id INTEGER NOT NULL REFERENCES releases(id),
+  task_id INTEGER NOT NULL REFERENCES foundry_tasks(id),
+  task_version INTEGER NOT NULL,
+  content_hash TEXT NOT NULL,
+  shingles TEXT NOT NULL DEFAULT '',  -- space-joined hashed 5-gram shingles for near-duplicate checks
+  PRIMARY KEY (release_id, task_id)
+);
+
+CREATE TABLE IF NOT EXISTS download_events (
+  id INTEGER PRIMARY KEY,
+  release_id INTEGER NOT NULL REFERENCES releases(id),
+  ok INTEGER NOT NULL,
+  detail TEXT NOT NULL DEFAULT '',
+  client_ip TEXT NOT NULL DEFAULT '',
+  created_at REAL NOT NULL
+);
 """

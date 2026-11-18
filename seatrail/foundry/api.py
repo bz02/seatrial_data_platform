@@ -2,7 +2,7 @@
 the dispatch module (P4)."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse
 
 from .. import config
@@ -423,3 +423,61 @@ def synth_run(body: SynthRunIn, sync: bool = Query(False), user=ADMIN):
 def synth_runs(asset_id: int | None = None, group_id: str | None = None, user=ADMIN):
     from .synthesizer import pipeline
     return pipeline.runs(asset_id, group_id)
+
+
+# ---------------------------------------------------------------------------
+# P6: packaging and delivery
+# ---------------------------------------------------------------------------
+@router.post("/batches/{bid}/releases")
+def build_release(bid: int, body: dict = Body(default={}), user=ADMIN):
+    from .delivery import packager
+    try:
+        return packager.package_batch(bid, body.get("task_ids"), body.get("include_trajectories"), user["id"],
+                                      body.get("client_names"))
+    except TransitionError as e:
+        conflict(e)
+
+
+@router.get("/releases/{rid}")
+def release(rid: int, user=ADMIN):
+    from .delivery import gateway, packager
+    return {**packager.get_release(rid), "downloads": gateway.downloads(rid)}
+
+
+@router.post("/releases/{rid}/verify")
+def release_verify(rid: int, user=ADMIN):
+    from .delivery import packager
+    return packager.verify_release(rid)
+
+
+@router.post("/releases/{rid}/deliver")
+def release_deliver(rid: int, body: dict = Body(default={}), user=ADMIN):
+    from .delivery import gateway
+    try:
+        return gateway.deliver(rid, user["id"], float(body.get("ttl_days", 7)))
+    except TransitionError as e:
+        conflict(e)
+
+
+@router.post("/releases/{rid}/link")
+def release_link(rid: int, body: dict = Body(default={}), user=ADMIN):
+    from .delivery import gateway
+    try:
+        return gateway.link(rid, float(body.get("ttl_days", 7)))
+    except TransitionError as e:
+        conflict(e)
+
+
+@router.post("/releases/{rid}/revoke")
+def release_revoke(rid: int, body: dict = Body(default={}), user=ADMIN):
+    from .delivery import gateway
+    return gateway.revoke(rid, user["id"], body.get("reason", ""))
+
+
+@router.get("/deliveries/{token}")
+def delivery_download(token: str, request: Request):
+    """Public: the signed link is the credential."""
+    from fastapi.responses import FileResponse
+    from .delivery import gateway
+    p = gateway.download(token, request.client.host if request.client else "")
+    return FileResponse(p, media_type="application/zip", filename=p.name)

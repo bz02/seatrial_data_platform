@@ -25,7 +25,7 @@ ALLOWED: dict[TaskStatus, set[TaskStatus]] = {
     S.SME_REVIEW: {S.QA_APPROVED, S.REWORK},
     S.REWORK: {S.SYNTH_CHECK},
     S.QA_APPROVED: {S.PACKAGED, S.REWORK},
-    S.PACKAGED: {S.DELIVERED},
+    S.PACKAGED: {S.DELIVERED, S.QA_APPROVED},   # back only when an undelivered release is revoked
     S.DELIVERED: {S.ACCEPTED, S.RETURNED},
     S.RETURNED: {S.REWORK},
     S.ACCEPTED: set(),

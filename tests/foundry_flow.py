@@ -49,15 +49,25 @@ def batch(**kw) -> dict:
     return store.create_batch(ContractBatchIn(**base))
 
 
-def draft(batch_id: int, author_id: int | None, **extra) -> dict:
-    t = store.create_task(TaskIn.model_validate(code_task(batch_id, author_id=author_id, **extra)))
+VARIANTS = ["Tiny calculator.", "Arithmetic helpers for the invoicing service, used by the nightly billing job.",
+            "Shared math utilities. Owners: platform team. Do not add dependencies here."]
+
+
+def draft(batch_id: int, author_id: int | None, variant: int = 0, **extra) -> dict:
+    spec = code_task(batch_id, author_id=author_id, **extra)
+    if variant:
+        spec["env"]["workspace"]["README.md"] = VARIANTS[variant % len(VARIANTS)] + f" Ticket FIN-{1000 + variant}."
+        spec["env"]["instructions"] += [" The billing team noticed it first.", " Finance flagged this in the March close.",
+                                        " Reported by QA during the release freeze."][variant % 3]
+        spec["title"] += f" #{variant}"
+    t = store.create_task(TaskIn.model_validate(spec))
     store.add_criterion(t["id"], RubricCriterionIn(kind="PROGRAMMATIC", spec_json={"test": "test_add_fixed"},
                                                    ground_truth_evidence_ref="calc.py:2"))
     return store.get_task(t["id"])
 
 
-def to_sme_review(batch_id: int, author_id: int | None) -> dict:
-    t = draft(batch_id, author_id)
+def to_sme_review(batch_id: int, author_id: int | None, variant: int = 0) -> dict:
+    t = draft(batch_id, author_id, variant)
     assert run_env_sanity_check(t["id"])["passed"]
     store.transition(t["id"], TaskStatus.SYNTH_CHECK, author_id)
     out = calibrate.calibrate_task(t["id"], adapters=sweet_panel(), k=4)
@@ -72,9 +82,9 @@ def approve(task_id: int, reviewer_id: int) -> dict:
         decision="APPROVE", checklist={c["criterion_id"]: True for c in t["criteria"]}))
 
 
-def to_qa_approved(env, batch_id: int | None = None) -> tuple[dict, dict]:
+def to_qa_approved(env, batch_id: int | None = None, variant: int = 0) -> tuple[dict, dict]:
     ids = experts(env)
     b = store.get_batch(batch_id) if batch_id else batch()
-    t = to_sme_review(b["id"], ids["dana"])
+    t = to_sme_review(b["id"], ids["dana"], variant)
     approve(t["id"], ids["luis"])
     return store.get_task(t["id"]), ids
