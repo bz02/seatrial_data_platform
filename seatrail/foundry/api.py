@@ -10,7 +10,8 @@ from . import jobs, store
 from .calibrator import calibrate, loss_analyzer
 from .calibrator.adapters import default_panel, get_adapter
 from .models import (AssignmentIn, CalibrationRunIn, ContractBatchIn, ExpertProfileIn, LeakageStatus, PiiScanStatus,
-                     QaDecisionIn, RubricCriterionIn, SourceAssetIn, SynthRunIn, TaskIn, TransitionIn)
+                     QaDecisionIn, RubricCriterionIn, SourceAssetIn, SynthRunIn, TaskIn, TransitionIn,
+                     ClaimDecisionIn, WarrantyClaimIn)
 from .sandbox_runner.runner import run_env_sanity_check
 from .state_machine import TransitionError
 
@@ -481,3 +482,87 @@ def delivery_download(token: str, request: Request):
     from .delivery import gateway
     p = gateway.download(token, request.client.host if request.client else "")
     return FileResponse(p, media_type="application/zip", filename=p.name)
+
+
+# ---------------------------------------------------------------------------
+# P7: acceptance, warranty, payouts and unit economics
+# ---------------------------------------------------------------------------
+@router.post("/releases/{rid}/accept")
+def release_accept(rid: int, body: dict = Body(default={}), user=ADMIN):
+    """Record the client's acceptance (all tasks in the release, or the listed ones)."""
+    from .delivery import packager
+    from .finance import service as finance
+    ids = body.get("task_ids") or packager.get_release(rid)["task_ids"]
+    return {"accepted": finance.accept(ids, user["id"])}
+
+
+@router.post("/finance/auto-accept")
+def finance_auto_accept(user=ADMIN):
+    from .finance import service as finance
+    return {"accepted": finance.auto_accept()}
+
+
+@router.post("/warranty/claims")
+def warranty_file(body: WarrantyClaimIn, user=ADMIN):
+    from .finance import service as finance
+    try:
+        return finance.file_claim(body.task_id, body.defect_tag, body.detail)
+    except TransitionError as e:
+        conflict(e)
+
+
+@router.get("/warranty/claims")
+def warranty_list(status: str | None = None, user=ADMIN):
+    from .finance import service as finance
+    return finance.claims(status)
+
+
+@router.post("/warranty/claims/{cid}/decide")
+def warranty_decide(cid: int, body: ClaimDecisionIn, user=ADMIN):
+    from .finance import service as finance
+    try:
+        return finance.decide_claim(cid, user["id"], body.valid, body.resolution, body.note)
+    except TransitionError as e:
+        conflict(e)
+
+
+@router.post("/warranty/claims/{cid}/replacement")
+def warranty_replacement(cid: int, body: dict = Body(...), user=ADMIN):
+    from .finance import service as finance
+    return finance.link_replacement(cid, int(body["task_id"]))
+
+
+@router.get("/finance/batches")
+def finance_batches(user=ADMIN):
+    from .finance import service as finance
+    return finance.batches_overview()
+
+
+@router.get("/finance/batches/{bid}")
+def finance_batch(bid: int, user=ADMIN):
+    from .finance import service as finance
+    return finance.economics(bid)
+
+
+@router.get("/finance/payouts/pending")
+def finance_pending(user=ADMIN):
+    from .finance import service as finance
+    return finance.pending()
+
+
+@router.post("/finance/payouts/run")
+def finance_run_payouts(body: dict = Body(default={}), user=ADMIN):
+    from .finance import service as finance
+    return finance.run_payouts(user["id"], body.get("reference", ""))
+
+
+@router.get("/finance/payouts/{reference}.csv", response_class=PlainTextResponse)
+def finance_payout_csv(reference: str, user=ADMIN):
+    from .finance import service as finance
+    return finance.payout_csv(reference)
+
+
+@router.get("/workbench/earnings")
+def wb_earnings(user=EXPERT):
+    from .finance import service as finance
+    return finance.earnings(user["id"])

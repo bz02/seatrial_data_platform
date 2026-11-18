@@ -45,7 +45,11 @@ async function loadQueue() {
   try { Q = await ST.api(V1 + "/queue"); }
   catch (e) { $("queue").innerHTML = `<div class="notice warn">${ST.esc(e.message)}</div>`; return; }
   const p = Q.profile;
+  const earn = await ST.api(V1 + "/earnings").catch(() => null);
+  const eb = (earn && earn.by_status) || {};
   $("queue").innerHTML = `
+    ${earn ? `<p class="small">Earnings: payable ${ST.money(Math.round((eb.PAYABLE || 0) * 100))} · held ${ST.money(Math.round((eb.HELD || 0) * 100))} · paid ${ST.money(Math.round((eb.PAID || 0) * 100))}</p>` : ""}`;
+  $("queue").innerHTML += `
     <p class="small">Domains: ${p.domain_tags.map((t) => `<span class="tag gray">${ST.esc(t)}</span>`).join(" ") || "none"}
       · load ${p.active_load}/${p.capacity_cap}${p.pod ? " · pod " + ST.esc(p.pod) : ""}
       ${p.qa_acceptance_rate != null ? " · QA acceptance " + ST.pct(p.qa_acceptance_rate) : ""}</p>

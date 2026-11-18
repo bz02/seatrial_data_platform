@@ -3,7 +3,8 @@
     DRAFT -> SYNTH_CHECK -> CALIBRATING -> SME_REVIEW -> QA_APPROVED -> PACKAGED -> DELIVERED
                                  |              |                                    |      |
                                  v              v                                    v      v
-                               REWORK <---------+------------------------------ RETURNED  ACCEPTED
+                               REWORK <---------+------------------------------ RETURNED <- ACCEPTED
+                                                                          (inside the warranty window)
                                  |
                                  +--> SYNTH_CHECK   (fixed task is re-verified, then re-calibrated)
 
@@ -28,7 +29,7 @@ ALLOWED: dict[TaskStatus, set[TaskStatus]] = {
     S.PACKAGED: {S.DELIVERED, S.QA_APPROVED},   # back only when an undelivered release is revoked
     S.DELIVERED: {S.ACCEPTED, S.RETURNED},
     S.RETURNED: {S.REWORK},
-    S.ACCEPTED: set(),
+    S.ACCEPTED: {S.RETURNED},   # only inside the warranty window
 }
 
 # Once a task is at or past QA approval it can be shipped, so its sources must be clean.
@@ -67,6 +68,7 @@ class TaskContext:
     active_reviewer_id: int | None = None
     authoring_problems: list[str] = field(default_factory=list)   # prompt lint errors + rubric rule breaks
     reviewer_pod_clash: bool = False
+    in_warranty: bool = False      # delivered, and the batch's warranty window has not closed
 
 
 def source_blockers(sources: list[SourceState]) -> list[str]:
@@ -132,6 +134,9 @@ def check(ctx: TaskContext, to: TaskStatus, actor_id: int | None = None) -> None
             raise TransitionError("the reviewer is in the author's pod", "conflict_of_interest")
         if actor_id is not None and ctx.author_id is not None and actor_id == ctx.author_id:
             raise TransitionError("the author cannot approve their own task", "conflict_of_interest")
+
+    if to == S.RETURNED and not ctx.in_warranty:
+        raise TransitionError("the warranty window for this task has closed", "warranty_expired")
 
     if to in SHIPPABLE:
         blockers = compliance_blockers(ctx.sources)

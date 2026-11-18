@@ -53,8 +53,6 @@ class TaskStatus(StrEnum):
     CALIBRATING = "CALIBRATING"
     SME_REVIEW = "SME_REVIEW"
     REWORK = "REWORK"
-    SOURCE_ACQUISITION = "SOURCE_ACQUISITION"
-    WARRANTY_REPLACEMENT = "WARRANTY_REPLACEMENT"
     QA_APPROVED = "QA_APPROVED"
     PACKAGED = "PACKAGED"
     DELIVERED = "DELIVERED"
@@ -93,6 +91,8 @@ class LedgerKind(StrEnum):
     COMPUTE = "COMPUTE"
     MODEL_API = "MODEL_API"
     REWORK = "REWORK"
+    SOURCE_ACQUISITION = "SOURCE_ACQUISITION"
+    WARRANTY_REPLACEMENT = "WARRANTY_REPLACEMENT"
 
 
 class FailureBucket(StrEnum):
@@ -266,3 +266,15 @@ class SynthRunIn(_In):
     archetype: Archetype | None = None
     author_id: int | None = None      # SME who will own the drafts
     max_revisions: int = Field(1, ge=0, le=3)
+
+
+class WarrantyClaimIn(_In):
+    task_id: int
+    defect_tag: DefectTag
+    detail: str = Field(min_length=10)
+
+
+class ClaimDecisionIn(_In):
+    valid: bool
+    resolution: str = Field("REPLACED", pattern="^(REPLACED|CREDITED)$")
+    note: str = ""

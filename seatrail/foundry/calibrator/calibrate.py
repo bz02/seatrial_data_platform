@@ -134,6 +134,9 @@ def calibrate_task(task_id: int, adapters: list[ModelAdapter] | None = None, mod
 
     total_n = sum(m["n"] for m in per_model)
     total_c = sum(m["c"] for m in per_model)
+    ran = sum(1 for m in per_model for r in m["rows"] if r["traj"].stop_reason != "circuit_open")
+    if ran and config.SANDBOX_USD_PER_ROLLOUT:
+        store.ledger(LedgerKind.COMPUTE, ran * config.SANDBOX_USD_PER_ROLLOUT, task_id, f"calibration {group} sandboxes")
     rate = total_c / total_n if total_n else 0.0
     if breaker.open:
         store.transition(task_id, TaskStatus.REWORK, actor_id,

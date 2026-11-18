@@ -296,4 +296,53 @@ CREATE TABLE IF NOT EXISTS download_events (
   client_ip TEXT NOT NULL DEFAULT '',
   created_at REAL NOT NULL
 );
+
+-- P7: unit economics. Expert earnings, payouts, revenue and the warranty.
+CREATE TABLE IF NOT EXISTS payout_lines (
+  id INTEGER PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  task_id INTEGER NOT NULL REFERENCES foundry_tasks(id),
+  role TEXT NOT NULL CHECK (role IN ('AUTHOR','REVIEWER')),
+  kind TEXT NOT NULL CHECK (kind IN ('BASE','HOLDBACK','REVIEW','CLAWBACK')),
+  amount_usd REAL NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('PAYABLE','HELD','FORFEITED','PAID')),
+  payout_id INTEGER REFERENCES expert_payouts(id),
+  note TEXT NOT NULL DEFAULT '',
+  created_at REAL NOT NULL,
+  released_at REAL
+);
+
+CREATE TABLE IF NOT EXISTS expert_payouts (
+  id INTEGER PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  amount_usd REAL NOT NULL,
+  line_count INTEGER NOT NULL,
+  reference TEXT NOT NULL,
+  created_by INTEGER REFERENCES users(id),
+  created_at REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS revenue_events (
+  id INTEGER PRIMARY KEY,
+  task_id INTEGER NOT NULL REFERENCES foundry_tasks(id),
+  batch_id INTEGER NOT NULL REFERENCES contract_batches(id),
+  kind TEXT NOT NULL CHECK (kind IN ('ACCEPTANCE','CREDIT')),
+  amount_usd REAL NOT NULL,
+  ref TEXT NOT NULL DEFAULT '',
+  created_at REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS warranty_claims (
+  id INTEGER PRIMARY KEY,
+  task_id INTEGER NOT NULL REFERENCES foundry_tasks(id),
+  defect_tag TEXT NOT NULL CHECK (defect_tag IN ('LEAKAGE','BAD_VERIFIER','AMBIGUOUS_PROMPT','TOO_EASY','UNSOLVABLE')),
+  detail TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'OPEN' CHECK (status IN ('OPEN','VALID','REJECTED')),
+  resolution TEXT NOT NULL DEFAULT '' CHECK (resolution IN ('','REPLACED','CREDITED')),
+  replacement_task_id INTEGER REFERENCES foundry_tasks(id),
+  decision_note TEXT NOT NULL DEFAULT '',
+  decided_by INTEGER REFERENCES users(id),
+  created_at REAL NOT NULL,
+  decided_at REAL
+);
 """

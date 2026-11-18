@@ -44,3 +44,6 @@ BASELINE_MODEL = _env("SEATRAIL_BASELINE_MODEL", "claude-opus-5-5")
 # Foundry (task production line)
 # Run calibration jobs inline instead of in the background pool (tests, small deployments).
 FOUNDRY_SYNC_JOBS = _env("SEATRAIL_FOUNDRY_SYNC_JOBS", "false").lower() == "true"
+
+# Foundry: what one sandboxed rollout costs us (container time), booked as COMPUTE.
+SANDBOX_USD_PER_ROLLOUT = float(_env("SEATRAIL_SANDBOX_USD_PER_ROLLOUT", "0.02"))

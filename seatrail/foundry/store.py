@@ -220,7 +220,28 @@ def context(tid: int) -> sm.TaskContext:
                                 s["gate_status"] == "APPROVED")
                  for s in srcs],
         author_id=r["author_id"], active_reviewer_id=reviewer, authoring_problems=problems,
-        reviewer_pod_clash=clash)
+        reviewer_pod_clash=clash, in_warranty=warranty_open(tid))
+
+
+DAY = 86400.0
+
+
+def delivered_at(tid: int) -> float | None:
+    r = db.q1("SELECT created_at FROM task_transitions WHERE task_id=? AND to_status='DELIVERED' ORDER BY id DESC"
+              " LIMIT 1", tid)
+    return r["created_at"] if r else None
+
+
+def warranty_until(tid: int) -> float | None:
+    d = delivered_at(tid)
+    if d is None:
+        return None
+    return d + get_batch(_row(tid)["batch_id"])["warranty_days"] * DAY
+
+
+def warranty_open(tid: int, now: float | None = None) -> bool:
+    w = warranty_until(tid)
+    return w is not None and (now or db.now()) <= w
 
 
 def transition(tid: int, to: TaskStatus, actor_id: int | None = None, reason: str = "") -> dict:
@@ -237,7 +258,12 @@ def transition(tid: int, to: TaskStatus, actor_id: int | None = None, reason: st
     return get_task(tid)
 
 
-_HOOKS: list = []
+def _finance_hook(tid, frm, to, actor_id) -> None:
+    from .finance import service as finance  # late import: finance builds on store
+    finance.on_transition(tid, frm, to, actor_id)
+
+
+_HOOKS: list = [_finance_hook]
 
 
 def on_transition(fn) -> None:
